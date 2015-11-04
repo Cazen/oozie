@@ -34,6 +34,7 @@ import org.apache.oozie.ErrorCode;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.action.ActionExecutor;
+import org.apache.oozie.client.Job;
 import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.command.CommandException;
@@ -47,7 +48,6 @@ import org.apache.oozie.service.Services;
 import org.apache.oozie.util.ELEvaluator;
 import org.apache.oozie.util.InstrumentUtils;
 import org.apache.oozie.util.Instrumentation;
-import org.apache.oozie.util.LogUtils;
 import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.workflow.WorkflowException;
 import org.apache.oozie.workflow.WorkflowInstance;
@@ -57,7 +57,7 @@ import org.apache.oozie.workflow.lite.LiteWorkflowInstance;
  * Base class for Action execution commands. Provides common functionality to handle different types of errors while
  * attempting to start or end an action.
  */
-public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
+public abstract class ActionXCommand<T> extends WorkflowXCommand<T> {
     private static final String INSTRUMENTATION_GROUP = "action.executors";
 
     protected static final String RECOVERY_ID_SEPARATOR = "@";
@@ -93,7 +93,7 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
             action.setStatus(status);
             action.setPending();
             action.incRetries();
-            long retryDelayMillis = executor.getRetryInterval() * 1000;
+            long retryDelayMillis = getRetryDelay(actionRetryCount, executor.getRetryInterval(), executor.getRetryPolicy());
             action.setPendingAge(new Date(System.currentTimeMillis() + retryDelayMillis));
             LOG.info("Next Retry, Attempt Number [{0}] in [{1}] milliseconds", actionRetryCount + 1, retryDelayMillis);
             this.resetUsed();
@@ -133,9 +133,9 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
     }
 
     /**
-     * Takes care of errors. </p> For errors while attempting to start the action, the job state is updated and an
-     * {@link ActionEndCommand} is queued. </p> For errors while attempting to end the action, the job state is updated.
-     * </p>
+     * Takes care of errors. <p> For errors while attempting to start the action, the job state is updated and an
+     * {@link ActionEndXCommand} is queued. <p> For errors while attempting to end the action, the job state is updated.
+     * <p>
      *
      * @param context the execution context.
      * @param executor the executor instance being used.
@@ -208,7 +208,7 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
     /**
      * Execute retry for action if this action is eligible for user-retry
      *
-     * @param context the execution context.
+     * @param action the Workflow action bean
      * @return true if user-retry has to be handled for this action
      * @throws CommandException thrown if unable to fail job
      */
@@ -254,6 +254,21 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
         getInstrumentation().addCron(INSTRUMENTATION_GROUP, type + "#" + getName(), cron);
     }
 
+    /*
+     * Returns the next retry time in milliseconds, based on retry policy algorithm.
+     */
+    private long getRetryDelay(int retryCount, long retryInterval, ActionExecutor.RETRYPOLICY retryPolicy) {
+        switch (retryPolicy) {
+            case EXPONENTIAL:
+                long retryTime = ((long) Math.pow(2, retryCount) * retryInterval * 1000L);
+                return retryTime;
+            case PERIODIC:
+                return retryInterval * 1000L;
+            default:
+                throw new UnsupportedOperationException("Retry policy not supported");
+        }
+    }
+
     /**
      * Workflow action executor context
      *
@@ -267,8 +282,10 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
         private boolean started;
         private boolean ended;
         private boolean executed;
+        private boolean shouldEndWF;
+        private Job.Status jobStatus;
 
-		/**
+        /**
 		 * Constructing the ActionExecutorContext, setting the private members
 		 * and constructing the proto configuration
 		 */
@@ -484,6 +501,23 @@ public abstract class ActionXCommand<T> extends WorkflowXCommand<Void> {
         public void setErrorInfo(String str, String exMsg) {
             action.setErrorInfo(str, exMsg);
         }
+
+        public boolean isShouldEndWF() {
+            return shouldEndWF;
+        }
+
+        public void setShouldEndWF(boolean shouldEndWF) {
+            this.shouldEndWF = shouldEndWF;
+        }
+
+        public Job.Status getJobStatus() {
+            return jobStatus;
+        }
+
+        public void setJobStatus(Job.Status jobStatus) {
+            this.jobStatus = jobStatus;
+        }
+
     }
 
 }

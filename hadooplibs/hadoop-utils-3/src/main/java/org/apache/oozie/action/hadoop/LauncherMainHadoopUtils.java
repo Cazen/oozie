@@ -33,29 +33,45 @@ import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.client.ClientRMProxy;
 import org.apache.hadoop.yarn.client.api.YarnClient;
 import org.apache.hadoop.yarn.exceptions.YarnException;
-import org.apache.hadoop.mapreduce.TypeConverter;
 
 public class LauncherMainHadoopUtils {
+
+    public static final String CHILD_MAPREDUCE_JOB_TAGS = "oozie.child.mapreduce.job.tags";
+    public static final String OOZIE_JOB_LAUNCH_TIME = "oozie.job.launch.time";
 
     private LauncherMainHadoopUtils() {
     }
 
     private static Set<ApplicationId> getChildYarnJobs(Configuration actionConf) {
+        System.out.println("Fetching child yarn jobs");
         Set<ApplicationId> childYarnJobs = new HashSet<ApplicationId>();
+        String tag = actionConf.get(CHILD_MAPREDUCE_JOB_TAGS);
+        if (tag == null) {
+            System.out.print("Could not find Yarn tags property " + CHILD_MAPREDUCE_JOB_TAGS);
+            return childYarnJobs;
+        }
+        System.out.println("tag id : " + tag);
         long startTime = 0L;
         try {
-            startTime = Long.parseLong((System.getProperty("oozie.job.launch.time")));
+            startTime = Long.parseLong((System.getProperty(OOZIE_JOB_LAUNCH_TIME)));
         } catch(NumberFormatException nfe) {
             throw new RuntimeException("Could not find Oozie job launch time", nfe);
         }
-        String tag = actionConf.get("mapreduce.job.tags");
-        if (tag == null) {
-            throw new RuntimeException("Could not find Yarn tags property (mapreduce.job.tags)");
-        }
+
         GetApplicationsRequest gar = GetApplicationsRequest.newInstance();
         gar.setScope(ApplicationsRequestScope.OWN);
-        gar.setStartRange(startTime, System.currentTimeMillis());
         gar.setApplicationTags(Collections.singleton(tag));
+        long endTime = System.currentTimeMillis();
+        if (startTime > endTime) {
+            System.out.println("WARNING: Clock skew between the Oozie server host and this host detected.  Please fix this.  " +
+                    "Attempting to work around...");
+            // We don't know which one is wrong (relative to the RM), so to be safe, let's assume they're both wrong and add an
+            // offset in both directions
+            long diff = 2 * (startTime - endTime);
+            startTime = startTime - diff;
+            endTime = endTime + diff;
+        }
+        gar.setStartRange(startTime, endTime);
         try {
             ApplicationClientProtocol proxy = ClientRMProxy.createRMProxy(actionConf, ApplicationClientProtocol.class);
             GetApplicationsResponse apps = proxy.getApplications(gar);
@@ -68,19 +84,9 @@ public class LauncherMainHadoopUtils {
         } catch (YarnException ye) {
             throw new RuntimeException("Exception occurred while finding child jobs", ye);
         }
-        return childYarnJobs;
-    }
 
-    public static String getYarnJobForMapReduceAction(Configuration actionConf) {
-        Set<ApplicationId> childYarnJobs = getChildYarnJobs(actionConf);
-        String childJobId = null;
-        if (!childYarnJobs.isEmpty()) {
-            ApplicationId childJobYarnId = childYarnJobs.iterator().next();
-            System.out.println("Found Map-Reduce job [" + childJobYarnId + "] already running");
-            // Need the JobID version for Oozie
-            childJobId = TypeConverter.fromYarn(childJobYarnId).toString();
-        }
-        return childJobId;
+        System.out.println("Child yarn jobs are found - " + StringUtils.join(childYarnJobs, ","));
+        return childYarnJobs;
     }
 
     public static void killChildYarnJobs(Configuration actionConf) {

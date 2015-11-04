@@ -19,7 +19,9 @@
 package org.apache.oozie.action.hadoop;
 
 import java.io.IOException;
+import java.net.URI;
 import java.net.URISyntaxException;
+import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -30,21 +32,29 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.Trash;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.security.AccessControlException;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.oozie.action.ActionExecutor;
 import org.apache.oozie.action.ActionExecutorException;
+import org.apache.oozie.client.OozieClient;
 import org.apache.oozie.client.WorkflowAction;
+import org.apache.oozie.dependency.FSURIHandler;
+import org.apache.oozie.dependency.URIHandler;
 import org.apache.oozie.service.ConfigurationService;
 import org.apache.oozie.service.HadoopAccessorException;
 import org.apache.oozie.service.HadoopAccessorService;
 import org.apache.oozie.service.Services;
+import org.apache.oozie.service.UserGroupInformationService;
+import org.apache.oozie.service.URIHandlerService;
 import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.util.XmlUtils;
 import org.jdom.Element;
 
 /**
- * File system action executor. <p/> This executes the file system mkdir, move and delete commands
+ * File system action executor. <p> This executes the file system mkdir, move and delete commands
  */
 public class FsActionExecutor extends ActionExecutor {
 
@@ -53,6 +63,15 @@ public class FsActionExecutor extends ActionExecutor {
     public FsActionExecutor() {
         super("fs");
         maxGlobCount = ConfigurationService.getInt(LauncherMapper.CONF_OOZIE_ACTION_FS_GLOB_MAX);
+    }
+
+    /**
+    * Initialize Action.
+    */
+    @Override
+    public void initActionType() {
+        super.initActionType();
+        registerError(AccessControlException.class.getName(), ActionExecutorException.ErrorType.ERROR, "FS014");
     }
 
     Path getPath(Element element, String attribute) {
@@ -164,7 +183,12 @@ public class FsActionExecutor extends ActionExecutor {
                 else {
                     if (command.equals("delete")) {
                         Path path = getPath(commandElement, "path");
-                        delete(context, fsConf, nameNodePath, path);
+                        boolean skipTrash = true;
+                        if (commandElement.getAttributeValue("skip-trash") != null &&
+                                commandElement.getAttributeValue("skip-trash").equals("false")) {
+                            skipTrash = false;
+                        }
+                        delete(context, fsConf, nameNodePath, path, skipTrash);
                     }
                     else {
                         if (command.equals("move")) {
@@ -301,7 +325,6 @@ public class FsActionExecutor extends ActionExecutor {
     /**
      * @param path
      * @param user
-     * @param group
      * @return FileSystem
      * @throws HadoopAccessorException
      */
@@ -340,7 +363,7 @@ public class FsActionExecutor extends ActionExecutor {
      * @throws ActionExecutorException
      */
     public void delete(Context context, Path path) throws ActionExecutorException {
-        delete(context, null, null, path);
+        delete(context, null, null, path, true);
     }
 
     /**
@@ -352,21 +375,46 @@ public class FsActionExecutor extends ActionExecutor {
      * @param path
      * @throws ActionExecutorException
      */
-    public void delete(Context context, XConfiguration fsConf, Path nameNodePath, Path path) throws ActionExecutorException {
+    public void delete(Context context, XConfiguration fsConf, Path nameNodePath, Path path, boolean skipTrash)
+            throws ActionExecutorException {
+        URI uri = path.toUri();
+        URIHandler handler;
         try {
-            path = resolveToFullPath(nameNodePath, path, true);
-            FileSystem fs = getFileSystemFor(path, context, fsConf);
-            Path[] pathArr = FileUtil.stat2Paths(fs.globStatus(path));
-            if (pathArr != null && pathArr.length > 0) {
-                checkGlobMax(pathArr);
-                for (Path p : pathArr) {
-                    if (fs.exists(p)) {
-                        if (!fs.delete(p, true)) {
-                            throw new ActionExecutorException(ActionExecutorException.ErrorType.ERROR, "FS005",
-                                    "delete, path [{0}] could not delete path", p);
+            handler = Services.get().get(URIHandlerService.class).getURIHandler(uri);
+            if (handler instanceof FSURIHandler) {
+                // Use legacy code to handle hdfs partition deletion
+                path = resolveToFullPath(nameNodePath, path, true);
+                final FileSystem fs = getFileSystemFor(path, context, fsConf);
+                Path[] pathArr = FileUtil.stat2Paths(fs.globStatus(path));
+                if (pathArr != null && pathArr.length > 0) {
+                    checkGlobMax(pathArr);
+                    for (final Path p : pathArr) {
+                        if (fs.exists(p)) {
+                            if (!skipTrash) {
+                                // Moving directory/file to trash of user.
+                                UserGroupInformationService ugiService = Services.get().get(UserGroupInformationService.class);
+                                UserGroupInformation ugi = ugiService.getProxyUser(fs.getConf().get(OozieClient.USER_NAME));
+                                ugi.doAs(new PrivilegedExceptionAction<FileSystem>() {
+                                    @Override
+                                    public FileSystem run() throws Exception {
+                                        Trash trash = new Trash(fs.getConf());
+                                        if (!trash.moveToTrash(p)) {
+                                            throw new ActionExecutorException(ActionExecutorException.ErrorType.ERROR, "FS005",
+                                                    "Could not move path [{0}] to trash on delete", p);
+                                        }
+                                        return null;
+                                    }
+                                });
+                            }
+                            else if (!fs.delete(p, true)) {
+                                throw new ActionExecutorException(ActionExecutorException.ErrorType.ERROR, "FS005",
+                                        "delete, path [{0}] could not delete path", p);
+                            }
                         }
                     }
                 }
+            } else {
+                handler.delete(uri, handler.getContext(uri, fsConf, context.getWorkflow().getUser(), false));
             }
         }
         catch (Exception ex) {
@@ -501,8 +549,9 @@ public class FsActionExecutor extends ActionExecutor {
                 st = fs.getFileStatus(path);
                 if (st.isDir()) {
                     throw new Exception(path.toString() + " is a directory");
-                } else if (st.getLen() != 0)
+                } else if (st.getLen() != 0) {
                     throw new Exception(path.toString() + " must be a zero-length file");
+                }
             }
             FSDataOutputStream out = fs.create(path);
             out.close();

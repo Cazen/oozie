@@ -24,15 +24,19 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.oozie.action.ActionExecutorException;
 import org.apache.oozie.client.WorkflowAction;
+import org.apache.oozie.service.Services;
+import org.apache.oozie.service.SparkConfigurationService;
 import org.jdom.Element;
 import org.jdom.Namespace;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class SparkActionExecutor extends JavaActionExecutor {
     public static final String SPARK_MAIN_CLASS_NAME = "org.apache.oozie.action.hadoop.SparkMain";
-    public static final String TASK_USER_PRECEDENCE = "mapreduce.task.classpath.user.precedence";
+    public static final String TASK_USER_PRECEDENCE = "mapreduce.task.classpath.user.precedence"; // hadoop-2
+    public static final String TASK_USER_CLASSPATH_PRECEDENCE = "mapreduce.user.classpath.first";  // hadoop-1
     public static final String SPARK_MASTER = "oozie.spark.master";
     public static final String SPARK_MODE = "oozie.spark.mode";
     public static final String SPARK_OPTS = "oozie.spark.spark-opts";
@@ -69,9 +73,20 @@ public class SparkActionExecutor extends JavaActionExecutor {
         String jarLocation = actionXml.getChildTextTrim("jar", ns);
         actionConf.set(SPARK_JAR, jarLocation);
 
+        StringBuilder sparkOptsSb = new StringBuilder();
+        if (master.startsWith("yarn")) {
+            String resourceManager = actionConf.get(HADOOP_JOB_TRACKER);
+            Map<String, String> sparkConfig = Services.get().get(SparkConfigurationService.class).getSparkConfig(resourceManager);
+            for (Map.Entry<String, String> entry : sparkConfig.entrySet()) {
+                sparkOptsSb.append("--conf ").append(entry.getKey()).append("=").append(entry.getValue()).append(" ");
+            }
+        }
         String sparkOpts = actionXml.getChildTextTrim("spark-opts", ns);
         if (sparkOpts != null) {
-            actionConf.set(SPARK_OPTS, sparkOpts);
+            sparkOptsSb.append(sparkOpts);
+        }
+        if (sparkOptsSb.length() > 0) {
+            actionConf.set(SPARK_OPTS, sparkOptsSb.toString().trim());
         }
 
         return actionConf;
@@ -84,6 +99,9 @@ public class SparkActionExecutor extends JavaActionExecutor {
         JobConf launcherJobConf = super.createLauncherConf(actionFs, context, action, actionXml, actionConf);
         if (launcherJobConf.get("oozie.launcher." + TASK_USER_PRECEDENCE) == null) {
             launcherJobConf.set(TASK_USER_PRECEDENCE, "true");
+        }
+        if (launcherJobConf.get("oozie.launcher." + TASK_USER_CLASSPATH_PRECEDENCE) == null) {
+            launcherJobConf.set(TASK_USER_CLASSPATH_PRECEDENCE, "true");
         }
         return launcherJobConf;
     }

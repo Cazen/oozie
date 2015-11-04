@@ -19,7 +19,6 @@
 package org.apache.oozie.service;
 
 import org.apache.oozie.ErrorCode;
-import org.apache.oozie.store.CoordinatorStore;
 import org.apache.oozie.store.SLAStore;
 import org.apache.oozie.store.Store;
 import org.apache.oozie.store.StoreException;
@@ -39,7 +38,7 @@ public class SLAStoreService implements Service {
     }
 
     /**
-     * Return a SLA store instance with a fresh transaction. <p/> The LSA store has to be committed and then closed to
+     * Return a SLA store instance with a fresh transaction. <p> The LSA store has to be committed and then closed to
      * commit changes, if only close it rolls back.
      *
      * @return a SLA store.
@@ -55,7 +54,7 @@ public class SLAStoreService implements Service {
     }
 
     /**
-     * Return a SLA store instance with an existing transaction. <p/> The SLA store has to be committed and then closed
+     * Return a SLA store instance with an existing transaction. <p> The SLA store has to be committed and then closed
      * to commit changes, if only close it rolls back.
      *
      * @return a SLA store.

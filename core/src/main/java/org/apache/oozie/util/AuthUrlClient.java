@@ -23,8 +23,10 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.UnsupportedEncodingException;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.security.PrivilegedExceptionAction;
 import java.util.Map;
 
@@ -34,9 +36,14 @@ import org.apache.hadoop.security.authentication.client.AuthenticationException;
 import org.apache.hadoop.security.authentication.client.Authenticator;
 import org.apache.hadoop.security.authentication.client.KerberosAuthenticator;
 import org.apache.hadoop.security.authentication.client.PseudoAuthenticator;
+import org.apache.oozie.service.ConfigurationService;
 import org.apache.oozie.service.Services;
 
 public class AuthUrlClient {
+
+    public static final String SERVER_SERVER_AUTH_TYPE = "oozie.server.authentication.type";
+
+    private static XLog LOG = XLog.getLog(AuthUrlClient.class);
 
     static private Class<? extends Authenticator> AuthenticatorClass = null;
 
@@ -78,7 +85,10 @@ public class AuthUrlClient {
         // Adapted from
         // org.apache.hadoop.security.authentication.server.AuthenticationFilter#init
         Class<? extends Authenticator> authClass;
-        String authName = Services.get().getConf().get("oozie.authentication.type");
+        String authName = ConfigurationService.get(SERVER_SERVER_AUTH_TYPE);
+
+        LOG.info("Oozie server-server authentication is " + authName);
+
         String authClassName;
         if (authName == null) {
             throw new IOException("Authentication type must be specified: simple|kerberos|<class>");
@@ -134,7 +144,7 @@ public class AuthUrlClient {
         return reader;
     }
 
-    public static String getQueryParamString(Map<String, String[]> params) {
+    public static String getQueryParamString(Map<String, String[]> params) throws UnsupportedEncodingException {
         StringBuilder stringBuilder = new StringBuilder();
         if (params == null || params.isEmpty()) {
             return "";
@@ -145,7 +155,7 @@ public class AuthUrlClient {
                 String value = params.get(key)[0]; // We don't support multi value.
                 stringBuilder.append(key);
                 stringBuilder.append("=");
-                stringBuilder.append(value);
+                stringBuilder.append(URLEncoder.encode(value,"UTF-8"));
             }
         }
         return stringBuilder.toString();

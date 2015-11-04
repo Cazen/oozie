@@ -295,7 +295,7 @@ public class ZKUtils {
     /**
      * Returns the index of this Oozie Server in ZooKeeper's list of Oozie Servers (ordered by registration time)
      *
-     * @param oozies The collection of metadata provided by all of the Oozie Servers (from calling {@link ZKUtils#getAllMetaData())
+     * @param oozies The collection of metadata provided by all of the Oozie Servers (from calling {@link ZKUtils#getAllMetaData()}
      * @return the index of this Oozie Server in ZooKeeper's list of Oozie Servers (ordered by registration time)
      */
     public int getZKIdIndex(List<ServiceInstance<Map>> oozies) {
@@ -322,7 +322,7 @@ public class ZKUtils {
                     log.info("'sasl' ACLs not set; setting...");
                     List<String> children = client.getZookeeperClient().getZooKeeper().getChildren(namespace, null);
                     for (String child : children) {
-                        checkAndSetACLs(child);
+                        checkAndSetACLs("/" + child);
                     }
                     client.getZookeeperClient().getZooKeeper().setACL(namespace, saslACL, -1);
                 }

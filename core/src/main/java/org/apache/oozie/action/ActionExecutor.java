@@ -18,6 +18,7 @@
 
 package org.apache.oozie.action;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.conf.Configuration;
@@ -40,7 +41,7 @@ import java.util.Properties;
 import java.util.LinkedHashMap;
 
 /**
- * Base action executor class. <p/> All the action executors should extend this class.
+ * Base action executor class. <p> All the action executors should extend this class.
  */
 public abstract class ActionExecutor {
 
@@ -49,14 +50,20 @@ public abstract class ActionExecutor {
      */
 	public static final String CONF_PREFIX = "oozie.action.";
 
-	public static final String MAX_RETRIES = CONF_PREFIX + "retries.max";
+    public static final String MAX_RETRIES = CONF_PREFIX + "retries.max";
+
+    public static final String ACTION_RETRY_INTERVAL = CONF_PREFIX + "retry.interval";
+
+    public static final String ACTION_RETRY_POLICY = CONF_PREFIX + "retry.policy";
 
     /**
      * Error code used by {@link #convertException} when there is not register error information for an exception.
      */
     public static final String ERROR_OTHER = "OTHER";
-    
-    public boolean requiresNNJT = false;
+
+    public static enum RETRYPOLICY {
+        EXPONENTIAL, PERIODIC
+    }
 
     private static class ErrorInfo {
         ActionExecutorException.ErrorType errorType;
@@ -108,7 +115,7 @@ public abstract class ActionExecutor {
         public ELEvaluator getELEvaluator();
 
         /**
-         * Set a workflow action variable. <p/> Convenience method that prefixes the variable name with the action name
+         * Set a workflow action variable. <p> Convenience method that prefixes the variable name with the action name
          * plus a '.'.
          *
          * @param name variable name.
@@ -117,7 +124,7 @@ public abstract class ActionExecutor {
         public void setVar(String name, String value);
 
         /**
-         * Get a workflow action variable. <p/> Convenience method that prefixes the variable name with the action name
+         * Get a workflow action variable. <p> Convenience method that prefixes the variable name with the action name
          * plus a '.'.
          *
          * @param name variable name.
@@ -215,6 +222,7 @@ public abstract class ActionExecutor {
     private String type;
     private int maxRetries;
     private long retryInterval;
+    private RETRYPOLICY retryPolicy;
 
     /**
      * Create an action executor with default retry parameters.
@@ -229,12 +237,27 @@ public abstract class ActionExecutor {
      * Create an action executor.
      *
      * @param type action executor type.
-     * @param retryInterval retry interval, in seconds.
+     * @param defaultRetryInterval retry interval, in seconds.
      */
-    protected ActionExecutor(String type, long retryInterval) {
+    protected ActionExecutor(String type, long defaultRetryInterval) {
         this.type = ParamChecker.notEmpty(type, "type");
         this.maxRetries = ConfigurationService.getInt(MAX_RETRIES);
-        this.retryInterval = retryInterval;
+        int retryInterval = ConfigurationService.getInt(ACTION_RETRY_INTERVAL);
+        this.retryInterval = retryInterval > 0 ? retryInterval : defaultRetryInterval;
+        this.retryPolicy = getRetryPolicyFromConf();
+    }
+
+    private RETRYPOLICY getRetryPolicyFromConf() {
+        String retryPolicy = ConfigurationService.get(ACTION_RETRY_POLICY);
+        if (StringUtils.isBlank(retryPolicy)) {
+            return RETRYPOLICY.PERIODIC;
+        } else {
+            try {
+                return RETRYPOLICY.valueOf(retryPolicy.toUpperCase().trim());
+            } catch (IllegalArgumentException e) {
+                return RETRYPOLICY.PERIODIC;
+            }
+        }
     }
 
     /**
@@ -262,10 +285,10 @@ public abstract class ActionExecutor {
     }
 
     /**
-     * Invoked once at system initialization time. <p/> It can be used to register error information for the expected
+     * Invoked once at system initialization time. <p> It can be used to register error information for the expected
      * exceptions. Exceptions should be register from subclasses to superclasses to ensure proper detection, same thing
-     * that it is done in a normal catch. <p/> This method should invoke the {@link #registerError} method to register
-     * all its possible errors. <p/> Subclasses overriding must invoke super.
+     * that it is done in a normal catch. <p> This method should invoke the {@link #registerError} method to register
+     * all its possible errors. <p> Subclasses overriding must invoke super.
      */
     public void initActionType() {
         XLog.getLog(getClass()).trace(" Init Action Type : [{0}]", getType());
@@ -282,7 +305,7 @@ public abstract class ActionExecutor {
     }
 
     /**
-     * Return the runtime directory of the Oozie instance. <p/> The directory is created under TMP and it is always a
+     * Return the runtime directory of the Oozie instance. <p> The directory is created under TMP and it is always a
      * new directory per system initialization.
      *
      * @return the runtime directory of the Oozie instance.
@@ -292,7 +315,7 @@ public abstract class ActionExecutor {
     }
 
     /**
-     * Return Oozie configuration. <p/> This is useful for actions that need access to configuration properties.
+     * Return Oozie configuration. <p> This is useful for actions that need access to configuration properties.
      *
      * @return Oozie configuration.
      */
@@ -357,6 +380,24 @@ public abstract class ActionExecutor {
     }
 
     /**
+     * Return the retry policy for the action executor.
+     *
+     * @return the retry policy for the action executor.
+     */
+    public RETRYPOLICY getRetryPolicy() {
+        return retryPolicy;
+    }
+
+    /**
+     * Sets the retry policy for the action executor.
+     *
+     * @param retryPolicy retry policy for the action executor.
+     */
+    public void setRetryPolicy(RETRYPOLICY retryPolicy) {
+        this.retryPolicy = retryPolicy;
+    }
+
+    /**
      * Return the retry interval for the action executor in seconds.
      *
      * @return the retry interval for the action executor in seconds.
@@ -376,7 +417,7 @@ public abstract class ActionExecutor {
 
     /**
      * Utility method to handle exceptions in the {@link #start}, {@link #end}, {@link #kill} and {@link #check} methods
-     * <p/> It uses the error registry to convert exceptions to {@link ActionExecutorException}s.
+     * <p> It uses the error registry to convert exceptions to {@link ActionExecutorException}s.
      *
      * @param ex exception to convert.
      * @return ActionExecutorException converted exception.
@@ -472,7 +513,7 @@ public abstract class ActionExecutor {
     }
 
     /**
-     * Start an action. <p/> The {@link Context#setStartData} method must be called within this method. <p/> If the
+     * Start an action. <p> The {@link Context#setStartData} method must be called within this method. <p> If the
      * action has completed, the {@link Context#setExecutionData} method must be called within this method.
      *
      * @param context executor context.
@@ -482,7 +523,7 @@ public abstract class ActionExecutor {
     public abstract void start(Context context, WorkflowAction action) throws ActionExecutorException;
 
     /**
-     * End an action after it has executed. <p/> The {@link Context#setEndData} method must be called within this
+     * End an action after it has executed. <p> The {@link Context#setEndData} method must be called within this
      * method.
      *
      * @param context executor context.
@@ -492,8 +533,8 @@ public abstract class ActionExecutor {
     public abstract void end(Context context, WorkflowAction action) throws ActionExecutorException;
 
     /**
-     * Check if an action has completed. This method must be implemented by Async Action Executors. <p/> If the action
-     * has completed, the {@link Context#setExecutionData} method must be called within this method. <p/> If the action
+     * Check if an action has completed. This method must be implemented by Async Action Executors. <p> If the action
+     * has completed, the {@link Context#setExecutionData} method must be called within this method. <p> If the action
      * has not completed, the {@link Context#setExternalStatus} method must be called within this method.
      *
      * @param context executor context.
@@ -503,7 +544,7 @@ public abstract class ActionExecutor {
     public abstract void check(Context context, WorkflowAction action) throws ActionExecutorException;
 
     /**
-     * Kill an action. <p/> The {@link Context#setEndData} method must be called within this method.
+     * Kill an action. <p> The {@link Context#setEndData} method must be called within this method.
      *
      * @param context executor context.
      * @param action the action to kill.
@@ -519,4 +560,25 @@ public abstract class ActionExecutor {
      */
     public abstract boolean isCompleted(String externalStatus);
 
+    /**
+     * Returns true if this action type requires a NameNode and JobTracker.  These can either be specified directly in the action
+     * via &lt;name-node&gt; and &lt;job-tracker&gt;, from the fields in the global section, or from their default values.  If
+     * false, Oozie won't ensure (i.e. won't throw an Exception if non-existant) that this action type has these values.
+     *
+     * @return true if a NameNode and JobTracker are required; false if not
+     */
+    public boolean requiresNameNodeJobTracker() {
+        return false;
+    }
+
+    /**
+     * Returns true if this action type supports a Configuration and JobXML.  In this case, Oozie will include the
+     * &lt;configuration&gt; and &lt;job-xml&gt; elements from the global section (if provided) with the action.  If false, Oozie
+     * won't add these.
+     *
+     * @return true if the global section's Configuration and JobXML should be given; false if not
+     */
+    public boolean supportsConfigurationJobXML() {
+        return false;
+    }
 }

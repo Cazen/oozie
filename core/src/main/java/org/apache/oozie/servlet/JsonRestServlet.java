@@ -39,13 +39,14 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
 import java.io.IOException;
 import java.security.AccessControlException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Base class for Oozie web service API Servlets. <p/> This class provides common instrumentation, error logging and
+ * Base class for Oozie web service API Servlets. <p> This class provides common instrumentation, error logging and
  * other common functionality.
  */
 public abstract class JsonRestServlet extends HttpServlet {
@@ -64,6 +65,8 @@ public abstract class JsonRestServlet extends HttpServlet {
 
     private XLog auditLog;
     XLog.Info logInfo;
+    private XLog LOG = XLog.getLog(getClass());
+
 
     /**
      * This bean defines a query string parameter.
@@ -166,7 +169,7 @@ public abstract class JsonRestServlet extends HttpServlet {
     }
 
     /**
-     * Define an instrumentation sampler. <p/> Sampling period is 60 seconds, the sampling frequency is 1 second. <p/>
+     * Define an instrumentation sampler. <p> Sampling period is 60 seconds, the sampling frequency is 1 second. <p>
      * The instrumentation group used is {@link #INSTRUMENTATION_GROUP}.
      *
      * @param samplerName sampler name.
@@ -245,18 +248,30 @@ public abstract class JsonRestServlet extends HttpServlet {
             String param = (String) request.getAttribute(AUDIT_PARAM);
             String user = XLog.Info.get().getParameter(XLogService.USER);
             String group = XLog.Info.get().getParameter(XLogService.GROUP);
-            String jobId = XLog.Info.get().getParameter(DagXLogInfoService.JOB);
+            String jobId = getJobId(request);
             String app = XLog.Info.get().getParameter(DagXLogInfoService.APP);
 
             String errorCode = (String) request.getAttribute(AUDIT_ERROR_CODE);
             String errorMessage = (String) request.getAttribute(AUDIT_ERROR_MESSAGE);
             String hostDetail = request.getRemoteAddr();
 
-            auditLog.info(
-                    "IP [{0}], USER [{1}], GROUP [{2}], APP [{3}], JOBID [{4}], OPERATION [{5}], PARAMETER [{6}], STATUS [{7}],"
-                            + " HTTPCODE [{8}], ERRORCODE [{9}], ERRORMESSAGE [{10}]", hostDetail, user, group, app,
-                    jobId, operation, param, status, httpStatusCode, errorCode, errorMessage);
+            auditLog.info("IP [{0}], USER [{1}], GROUP [{2}], APP [{3}], " + DagXLogInfoService.AUDIT_JOBID
+                    + " [{4}], OPERATION [{5}], PARAMETER [{6}], STATUS [{7}],"
+                    + " HTTPCODE [{8}], ERRORCODE [{9}], ERRORMESSAGE [{10}]", hostDetail, user, group, app, jobId,
+                    operation, param, status, httpStatusCode, errorCode, errorMessage);
         }
+    }
+
+    private String getJobId(HttpServletRequest request) {
+        String jobId = XLog.Info.get().getParameter(DagXLogInfoService.JOB);
+        if (jobId == null) {
+            LOG.debug("JobId is not present in XLog.Info, getting it from HttpServletRequest" );
+            jobId = getResourceName(request);
+            if (!(jobId.endsWith("-C") || jobId.endsWith("-B") || jobId.endsWith("-W") || jobId.contains("C@"))) {
+                jobId = null;
+            }
+        }
+        return jobId;
     }
 
     /**
@@ -467,7 +482,7 @@ public abstract class JsonRestServlet extends HttpServlet {
     }
 
     /**
-     * Return the resource name of the request. <p/> The resource name is the whole extra path. If the extra path starts
+     * Return the resource name of the request. <p> The resource name is the whole extra path. If the extra path starts
      * with '/', the first '/' is trimmed.
      *
      * @param request request instance

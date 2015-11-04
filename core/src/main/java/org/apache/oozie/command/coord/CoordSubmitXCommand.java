@@ -90,9 +90,9 @@ import org.xml.sax.SAXException;
 /**
  * This class provides the functionalities to resolve a coordinator job XML and write the job information into a DB
  * table.
- * <p/>
+ * <p>
  * Specifically it performs the following functions: 1. Resolve all the variables or properties using job
- * configurations. 2. Insert all datasets definition as part of the <data-in> and <data-out> tags. 3. Validate the XML
+ * configurations. 2. Insert all datasets definition as part of the &lt;data-in&gt; and &lt;data-out&gt; tags. 3. Validate the XML
  * at runtime.
  */
 public class CoordSubmitXCommand extends SubmitTransitionXCommand {
@@ -143,6 +143,7 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
     private ELEvaluator evalAction = null;
     private ELEvaluator evalSla = null;
     private ELEvaluator evalTimeout = null;
+    private ELEvaluator evalInitialInstance = null;
 
     static {
         String[] badUserProps = { PropertiesUtils.YEAR, PropertiesUtils.MONTH, PropertiesUtils.DAY,
@@ -359,6 +360,9 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
             start = cal.getTime();
 
             Date nextTime = CoordCommandUtils.getNextValidActionTimeForCronFrequency(start, coordJob);
+            if (nextTime == null) {
+                throw new IllegalArgumentException("Invalid coordinator cron frequency: " + coordJob.getFrequency());
+            }
             if (!nextTime.before(coordJob.getEndTime())) {
                 throw new IllegalArgumentException("Coordinator job with frequency '" +
                         coordJob.getFrequency() + "' materializes no actions between start and end time.");
@@ -658,6 +662,8 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
         evalInst = CoordELEvaluator.createELEvaluatorForGroup(conf, "coord-job-submit-instances");
         evalAction = CoordELEvaluator.createELEvaluatorForGroup(conf, "coord-action-start");
         evalTimeout = CoordELEvaluator.createELEvaluatorForGroup(conf, "coord-job-wait-timeout");
+        evalInitialInstance = CoordELEvaluator.createELEvaluatorForGroup(conf, "coord-job-submit-initial-instance");
+
     }
 
     /**
@@ -966,7 +972,7 @@ public class CoordSubmitXCommand extends SubmitTransitionXCommand {
                     .toString() : ((TimeUnit) evalFreq.getVariable("timeunit")).toString());
             addAnAttribute("end_of_duration", dsElem, evalFreq.getVariable("endOfDuration") == null ? TimeUnit.NONE
                     .toString() : ((TimeUnit) evalFreq.getVariable("endOfDuration")).toString());
-            val = resolveAttribute("initial-instance", dsElem, evalNofuncs);
+            val = resolveAttribute("initial-instance", dsElem, evalInitialInstance);
             ParamChecker.checkDateOozieTZ(val, "initial-instance");
             checkInitialInstance(val);
             val = resolveAttribute("timezone", dsElem, evalNofuncs);

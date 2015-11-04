@@ -40,6 +40,8 @@ public interface JsonTags {
 
     public static final String JOB_ID = "id";
 
+    public static final String JOB_IDS = "ids";
+
     public static final String WORKFLOW_APP_PATH = "appPath";
     public static final String WORKFLOW_APP_NAME = "appName";
     public static final String WORKFLOW_ID = "id";
@@ -83,7 +85,10 @@ public interface JsonTags {
     public static final String WORKFLOW_ACTION_CONSOLE_URL = "consoleUrl";
     public static final String WORKFLOW_ACTION_ERROR_CODE = "errorCode";
     public static final String WORKFLOW_ACTION_ERROR_MESSAGE = "errorMessage";
-
+    public static final String WORKFLOW_ACTION_USER_RETRY_INTERVAL = "userRetryInterval";
+    public static final String WORKFLOW_ACTION_USER_RETRY_COUNT = "userRetryCount";
+    public static final String WORKFLOW_ACTION_USER_RETRY_MAX = "userRetryMax";
+    public static final String WORKFLOW_ACTION_CRED = "cred";
 
     public static final String COORDINATOR_JOB_ID = "coordJobId";
     public static final String COORDINATOR_JOB_NAME = "coordJobName";
@@ -165,13 +170,19 @@ public interface JsonTags {
     public static final String SLA_SUMMARY_NOMINAL_TIME = "nominalTime";
     public static final String SLA_SUMMARY_EXPECTED_START = "expectedStart";
     public static final String SLA_SUMMARY_ACTUAL_START = "actualStart";
+    public static final String SLA_SUMMARY_START_DELAY = "startDelay";
     public static final String SLA_SUMMARY_EXPECTED_END = "expectedEnd";
     public static final String SLA_SUMMARY_ACTUAL_END = "actualEnd";
+    public static final String SLA_SUMMARY_END_DELAY = "endDelay";
     public static final String SLA_SUMMARY_EXPECTED_DURATION = "expectedDuration";
     public static final String SLA_SUMMARY_ACTUAL_DURATION = "actualDuration";
+    public static final String SLA_SUMMARY_DURATION_DELAY = "durationDelay";
     public static final String SLA_SUMMARY_JOB_STATUS = "jobStatus";
     public static final String SLA_SUMMARY_SLA_STATUS = "slaStatus";
+    public static final String SLA_SUMMARY_EVENT_STATUS = "eventStatus";
     public static final String SLA_SUMMARY_LAST_MODIFIED = "lastModified";
+    public static final String SLA_ALERT_STATUS = "slaAlertStatus";
+
 
     public static final String TO_STRING = "toString";
 
@@ -233,4 +244,7 @@ public interface JsonTags {
     public static final String COORD_UPDATE_DIFF = "diff";
 
     public static final String STATUS = "status";
+
+    public static final String VALIDATE = "validate";
+
 }

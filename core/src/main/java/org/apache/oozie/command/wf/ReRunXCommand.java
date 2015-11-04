@@ -51,6 +51,7 @@ import org.apache.oozie.executor.jpa.BatchQueryExecutor;
 import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor;
 import org.apache.oozie.executor.jpa.BatchQueryExecutor.UpdateEntry;
 import org.apache.oozie.executor.jpa.WorkflowJobQueryExecutor.WorkflowJobQuery;
+import org.apache.oozie.service.ConfigurationService;
 import org.apache.oozie.service.DagXLogInfoService;
 import org.apache.oozie.service.HadoopAccessorException;
 import org.apache.oozie.service.HadoopAccessorService;
@@ -94,6 +95,7 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
 
     private static final Set<String> DISALLOWED_DEFAULT_PROPERTIES = new HashSet<String>();
     private static final Set<String> DISALLOWED_USER_PROPERTIES = new HashSet<String>();
+    public static final String DISABLE_CHILD_RERUN = "oozie.wf.rerun.disablechild";
 
     static {
         String[] badUserProps = { PropertiesUtils.DAYS, PropertiesUtils.HOURS, PropertiesUtils.MINUTES,
@@ -176,16 +178,8 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
             // necessary to ensure propagation of Oozie properties to Hadoop calls downstream
             conf = ((XConfiguration) conf).resolve();
 
-            // Prepare the action endtimes map
-            Map<String, Date> actionEndTimes = new HashMap<String, Date>();
-            for (WorkflowActionBean action : actions) {
-                if (action.getEndTime() != null) {
-                    actionEndTimes.put(action.getName(), action.getEndTime());
-                }
-            }
-
             try {
-                newWfInstance = workflowLib.createInstance(app, conf, jobId, actionEndTimes);
+                newWfInstance = workflowLib.createInstance(app, conf, jobId);
             }
             catch (WorkflowException e) {
                 throw new CommandException(e);
@@ -335,10 +329,19 @@ public class ReRunXCommand extends WorkflowXCommand<Void> {
      * Checks the pre-conditions that are required for workflow to recover - Last run of Workflow should be completed -
      * The nodes that are to be skipped are to be completed successfully in the base run.
      *
-     * @throws org.apache.oozie.command.CommandException,PreconditionException On failure of pre-conditions
+     * @throws CommandException
+     * @throws PreconditionException On failure of pre-conditions
      */
     @Override
     protected void eagerVerifyPrecondition() throws CommandException, PreconditionException {
+        // Throwing error if parent exist and same workflow trying to rerun, when running child workflow disabled
+        // through conf.
+        if (wfBean.getParentId() != null && !conf.getBoolean(SubWorkflowActionExecutor.SUBWORKFLOW_RERUN, false)
+                && ConfigurationService.getBoolean(DISABLE_CHILD_RERUN)) {
+            throw new CommandException(ErrorCode.E0755, " Rerun is not allowed through child workflow, please" +
+                    " re-run through the parent " + wfBean.getParentId());
+        }
+
         if (!(wfBean.getStatus().equals(WorkflowJob.Status.FAILED)
                 || wfBean.getStatus().equals(WorkflowJob.Status.KILLED) || wfBean.getStatus().equals(
                         WorkflowJob.Status.SUCCEEDED))) {

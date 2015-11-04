@@ -68,13 +68,13 @@ import org.json.simple.JSONObject;
 
     @NamedQuery(name = "UPDATE_ACTION_END", query = "update WorkflowActionBean a set a.stats = :stats, a.errorCode = :errorCode, a.errorMessage = :errorMessage, a.retries = :retries, a.endTimestamp = :endTime, a.statusStr = :status, a.pending = :pending, a.pendingAgeTimestamp = :pendingAge, a.signalValue = :signalValue, a.userRetryCount = :userRetryCount, a.externalStatus = :externalStatus where a.id = :id"),
 
-    @NamedQuery(name = "UPDATE_ACTION_PENDING", query = "update WorkflowActionBean a set a.pending = :pending, a.pendingAgeTimestamp = :pendingAge where a.id = :id"),
+    @NamedQuery(name = "UPDATE_ACTION_PENDING", query = "update WorkflowActionBean a set a.pending = :pending, a.pendingAgeTimestamp = :pendingAge, a.executionPath = :executionPath where a.id = :id"),
 
     @NamedQuery(name = "UPDATE_ACTION_STATUS_PENDING", query = "update WorkflowActionBean a set a.statusStr = :status, a.pending = :pending, a.pendingAgeTimestamp = :pendingAge where a.id = :id"),
 
     @NamedQuery(name = "UPDATE_ACTION_PENDING_TRANS", query = "update WorkflowActionBean a set a.pending = :pending, a.pendingAgeTimestamp = :pendingAge, a.transition = :transition where a.id = :id"),
 
-    @NamedQuery(name = "UPDATE_ACTION_PENDING_TRANS_ERROR", query = "update WorkflowActionBean a set a.pending = :pending, a.pendingAgeTimestamp = :pendingAge, a.transition = :transition, a.errorCode = :errorCode, a.errorMessage = :errorMessage where a.id = :id"),
+    @NamedQuery(name = "UPDATE_ACTION_PENDING_TRANS_ERROR", query = "update WorkflowActionBean a set a.pending = :pending, a.pendingAgeTimestamp = :pendingAge, a.transition = :transition, a.errorCode = :errorCode, a.errorMessage = :errorMessage, a.statusStr = :status where a.id = :id"),
 
     @NamedQuery(name = "DELETE_ACTION", query = "delete from WorkflowActionBean a where a.id IN (:id)"),
 
@@ -104,7 +104,7 @@ import org.json.simple.JSONObject;
 
     @NamedQuery(name = "GET_ACTIONS_OF_WORKFLOW_FOR_UPDATE", query = "select OBJECT(a) from WorkflowActionBean a where a.wfId = :wfId order by a.startTimestamp"),
 
-    @NamedQuery(name = "GET_PENDING_ACTIONS", query = "select a.id, a.wfId, a.statusStr, a.type, a.pendingAgeTimestamp from WorkflowActionBean a where a.pending = 1 AND a.pendingAgeTimestamp < :pendingAge AND a.statusStr <> 'RUNNING'"),
+    @NamedQuery(name = "GET_PENDING_ACTIONS", query = "select a.id, a.wfId, a.statusStr, a.type, a.pendingAgeTimestamp from WorkflowActionBean a where a.pending = 1 AND a.pendingAgeTimestamp < :pendingAge AND a.statusStr <> 'RUNNING' AND a.createdTimeTS >= :createdTime"),
 
     @NamedQuery(name = "GET_RUNNING_ACTIONS", query = "select a.id from WorkflowActionBean a where a.pending = 1 AND a.statusStr = 'RUNNING' AND a.lastCheckTimestamp < :lastCheckTime"),
 
@@ -493,7 +493,7 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
 
     /**
      * Set a tracking information for an action, and set the action status to
-     * {@link Action.Status#DONE}
+     * {@link org.apache.oozie.client.WorkflowAction.Status#DONE}
      *
      * @param externalId external ID for the action.
      * @param trackerUri tracker URI for the action.
@@ -513,7 +513,7 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
 
     /**
      * Set the completion information for an action start. Sets the Action
-     * status to {@link Action.Status#DONE}
+     * status to {@link org.apache.oozie.client.WorkflowAction.Status#DONE}
      *
      * @param externalStatus action external end status.
      * @param actionData action output data, <code>null</code> if there is no
@@ -539,7 +539,7 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
     /**
      * Set the action statistics info for the workflow action.
      *
-     * @param Json representation of the stats.
+     * @param jsonStats representation of the stats.
      */
     public void setExecutionStats(String jsonStats) {
         setStats(jsonStats);
@@ -572,7 +572,7 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
     /**
      * Set external child ids
      *
-     * @param externalChildIds
+     * @param externalChildIDs
      */
     public void setExternalChildIDsBlob(StringBlob externalChildIDs) {
         this.externalChildIDs = externalChildIDs;
@@ -590,8 +590,9 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
     /**
      * Set the completion information for an action end.
      *
-     * @param status action status, {@link Action.Status#OK} or
-     *        {@link Action.Status#ERROR} or {@link Action.Status#KILLED}
+     * @param status action status, {@link org.apache.oozie.client.WorkflowAction.Status#OK} or
+     *        {@link org.apache.oozie.client.WorkflowAction.Status#ERROR} or
+     *        {@link org.apache.oozie.client.WorkflowAction.Status#KILLED}
      * @param signalValue the signal value. In most cases, the value should be
      *        OK or ERROR.
      */
@@ -707,7 +708,7 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
 
     /**
      * Return the signal value for the action.
-     * <p/>
+     * <p>
      * For decision nodes it is the choosen transition, for actions it is OK or
      * ERROR.
      *
@@ -719,7 +720,7 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
 
     /**
      * Set the signal value for the action.
-     * <p/>
+     * <p>
      * For decision nodes it is the choosen transition, for actions it is OK or
      * ERROR.
      *
@@ -861,6 +862,10 @@ public class WorkflowActionBean implements Writable, WorkflowAction, JsonBean {
         json.put(JsonTags.WORKFLOW_ACTION_ERROR_CODE, errorCode);
         json.put(JsonTags.WORKFLOW_ACTION_ERROR_MESSAGE, errorMessage);
         json.put(JsonTags.TO_STRING, toString());
+        json.put(JsonTags.WORKFLOW_ACTION_USER_RETRY_INTERVAL, userRetryInterval);
+        json.put(JsonTags.WORKFLOW_ACTION_USER_RETRY_COUNT, userRetryCount);
+        json.put(JsonTags.WORKFLOW_ACTION_USER_RETRY_MAX, userRetryMax);
+        json.put(JsonTags.WORKFLOW_ACTION_CRED, cred);
         return json;
     }
 

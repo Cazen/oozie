@@ -110,6 +110,7 @@ public class WorkflowActionQueryExecutor extends
             case UPDATE_ACTION_PENDING:
                 query.setParameter("pending", actionBean.getPending());
                 query.setParameter("pendingAge", actionBean.getPendingAgeTimestamp());
+                query.setParameter("executionPath", actionBean.getExecutionPath());
                 query.setParameter("id", actionBean.getId());
                 break;
             case UPDATE_ACTION_STATUS_PENDING:
@@ -130,6 +131,7 @@ public class WorkflowActionQueryExecutor extends
                 query.setParameter("pendingAge", actionBean.getPendingAgeTimestamp());
                 query.setParameter("errorCode", actionBean.getErrorCode());
                 query.setParameter("errorMessage", actionBean.getErrorMessage());
+                query.setParameter("status", actionBean.getStatusStr());
                 query.setParameter("id", actionBean.getId());
                 break;
             case UPDATE_ACTION_START:
@@ -209,7 +211,9 @@ public class WorkflowActionQueryExecutor extends
             case GET_PENDING_ACTIONS:
                 Long minimumPendingAgeSecs = (Long) parameters[0];
                 Timestamp pts = new Timestamp(System.currentTimeMillis() - minimumPendingAgeSecs * 1000);
+                Timestamp createdTimeInterval = new Timestamp((Long) parameters[1]);
                 query.setParameter("pendingAge", pts);
+                query.setParameter("createdTime", createdTimeInterval);
                 break;
             case GET_ACTIONS_FOR_WORKFLOW_RERUN:
                 query.setParameter("wfId", parameters[0]);
@@ -368,12 +372,22 @@ public class WorkflowActionQueryExecutor extends
 
     @Override
     public WorkflowActionBean get(WorkflowActionQuery namedQuery, Object... parameters) throws JPAExecutorException {
+        WorkflowActionBean bean = getIfExist(namedQuery, parameters);
+        if (bean == null) {
+            throw new JPAExecutorException(ErrorCode.E0605, getSelectQuery(namedQuery,
+                    Services.get().get(JPAService.class).getEntityManager(), parameters).toString());
+        }
+        return bean;
+    }
+
+    @Override
+    public WorkflowActionBean getIfExist(WorkflowActionQuery namedQuery, Object... parameters) throws JPAExecutorException {
         JPAService jpaService = Services.get().get(JPAService.class);
         EntityManager em = jpaService.getEntityManager();
         Query query = getSelectQuery(namedQuery, em, parameters);
         Object ret = jpaService.executeGet(namedQuery.name(), query, em);
         if (ret == null) {
-            throw new JPAExecutorException(ErrorCode.E0605, query.toString());
+            return null;
         }
         WorkflowActionBean bean = constructBean(namedQuery, ret);
         return bean;

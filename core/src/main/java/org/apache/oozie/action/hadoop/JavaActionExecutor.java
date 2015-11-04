@@ -18,17 +18,16 @@
 
 package org.apache.oozie.action.hadoop;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.io.StringReader;
 import java.net.ConnectException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.text.MessageFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -59,6 +58,8 @@ import org.apache.oozie.action.ActionExecutor;
 import org.apache.oozie.action.ActionExecutorException;
 import org.apache.oozie.client.OozieClient;
 import org.apache.oozie.client.WorkflowAction;
+import org.apache.oozie.command.coord.CoordActionStartXCommand;
+import org.apache.oozie.command.wf.ActionStartXCommand;
 import org.apache.oozie.service.ConfigurationService;
 import org.apache.oozie.service.HadoopAccessorException;
 import org.apache.oozie.service.HadoopAccessorService;
@@ -81,9 +82,10 @@ import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenIdentifier;
 import org.apache.oozie.hadoop.utils.HadoopShims;
 
+
 public class JavaActionExecutor extends ActionExecutor {
 
-    private static final String HADOOP_USER = "user.name";
+    protected static final String HADOOP_USER = "user.name";
     public static final String HADOOP_JOB_TRACKER = "mapred.job.tracker";
     public static final String HADOOP_JOB_TRACKER_2 = "mapreduce.jobtracker.address";
     public static final String HADOOP_YARN_RM = "yarn.resourcemanager.address";
@@ -94,10 +96,13 @@ public class JavaActionExecutor extends ActionExecutor {
     public final static String MAX_EXTERNAL_STATS_SIZE = "oozie.external.stats.max.size";
     public static final String ACL_VIEW_JOB = "mapreduce.job.acl-view-job";
     public static final String ACL_MODIFY_JOB = "mapreduce.job.acl-modify-job";
+    public static final String HADOOP_YARN_TIMELINE_SERVICE_ENABLED = "yarn.timeline-service.enabled";
     public static final String HADOOP_YARN_UBER_MODE = "mapreduce.job.ubertask.enable";
+    public static final String HADOOP_YARN_KILL_CHILD_JOBS_ON_AMRESTART = "oozie.action.launcher.am.restart.kill.childjobs";
     public static final String HADOOP_MAP_MEMORY_MB = "mapreduce.map.memory.mb";
     public static final String HADOOP_CHILD_JAVA_OPTS = "mapred.child.java.opts";
     public static final String HADOOP_MAP_JAVA_OPTS = "mapreduce.map.java.opts";
+    public static final String HADOOP_REDUCE_JAVA_OPTS = "mapreduce.reduce.java.opts";
     public static final String HADOOP_CHILD_JAVA_ENV = "mapred.child.env";
     public static final String HADOOP_MAP_JAVA_ENV = "mapreduce.map.env";
     public static final String YARN_AM_RESOURCE_MB = "yarn.app.mapreduce.am.resource.mb";
@@ -114,7 +119,11 @@ public class JavaActionExecutor extends ActionExecutor {
     private static final String FAILED_KILLED = "FAILED/KILLED";
     protected XLog LOG = XLog.getLog(getClass());
     private static final Pattern heapPattern = Pattern.compile("-Xmx(([0-9]+)[mMgG])");
+    private static final String JAVA_TMP_DIR_SETTINGS = "-Djava.io.tmpdir=";
     public static final String CONF_HADOOP_YARN_UBER_MODE = "oozie.action.launcher." + HADOOP_YARN_UBER_MODE;
+    public static final String HADOOP_JOB_CLASSLOADER = "mapreduce.job.classloader";
+    public static final String HADOOP_USER_CLASSPATH_FIRST = "mapreduce.user.classpath.first";
+    public static final String OOZIE_CREDENTIALS_SKIP = "oozie.credentials.skip";
 
     static {
         DISALLOWED_PROPERTIES.add(HADOOP_USER);
@@ -130,7 +139,6 @@ public class JavaActionExecutor extends ActionExecutor {
 
     protected JavaActionExecutor(String type) {
         super(type);
-        requiresNNJT = true;
     }
 
     public static List<Class> getCommonLauncherClasses() {
@@ -199,10 +207,20 @@ public class JavaActionExecutor extends ActionExecutor {
     }
 
     public JobConf createBaseHadoopConf(Context context, Element actionXml) {
+        return createBaseHadoopConf(context, actionXml, true);
+    }
+
+    protected JobConf createBaseHadoopConf(Context context, Element actionXml, boolean loadResources) {
         Namespace ns = actionXml.getNamespace();
         String jobTracker = actionXml.getChild("job-tracker", ns).getTextTrim();
         String nameNode = actionXml.getChild("name-node", ns).getTextTrim();
-        JobConf conf = Services.get().get(HadoopAccessorService.class).createJobConf(jobTracker);
+        JobConf conf = null;
+        if (loadResources) {
+            conf = Services.get().get(HadoopAccessorService.class).createJobConf(jobTracker);
+        }
+        else {
+            conf = new JobConf(false);
+        }
         conf.set(HADOOP_USER, context.getProtoActionConf().get(WorkflowAppService.HADOOP_USER));
         conf.set(HADOOP_JOB_TRACKER, jobTracker);
         conf.set(HADOOP_JOB_TRACKER_2, jobTracker);
@@ -210,6 +228,10 @@ public class JavaActionExecutor extends ActionExecutor {
         conf.set(HADOOP_NAME_NODE, nameNode);
         conf.set("mapreduce.fileoutputcommitter.marksuccessfuljobs", "true");
         return conf;
+    }
+
+    protected JobConf loadHadoopDefaultResources(Context context, Element actionXml) {
+        return createBaseHadoopConf(context, actionXml);
     }
 
     private void injectLauncherProperties(Configuration srcConf, Configuration launcherConf) {
@@ -230,24 +252,22 @@ public class JavaActionExecutor extends ActionExecutor {
             throws ActionExecutorException {
         try {
             Namespace ns = actionXml.getNamespace();
+            XConfiguration launcherConf = new XConfiguration();
+            // Inject action defaults for launcher
+            HadoopAccessorService has = Services.get().get(HadoopAccessorService.class);
+            XConfiguration actionDefaultConf = has.createActionDefaultConf(conf.get(HADOOP_JOB_TRACKER), getType());
+            injectLauncherProperties(actionDefaultConf, launcherConf);
+            // Inject <configuration> for launcher
             Element e = actionXml.getChild("configuration", ns);
             if (e != null) {
                 String strConf = XmlUtils.prettyPrint(e).toString();
                 XConfiguration inlineConf = new XConfiguration(new StringReader(strConf));
-
-                XConfiguration launcherConf = new XConfiguration();
-                HadoopAccessorService has = Services.get().get(HadoopAccessorService.class);
-                XConfiguration actionDefaultConf = has.createActionDefaultConf(conf.get(HADOOP_JOB_TRACKER), getType());
-                injectLauncherProperties(actionDefaultConf, launcherConf);
                 injectLauncherProperties(inlineConf, launcherConf);
-                injectLauncherUseUberMode(launcherConf);
-                checkForDisallowedProps(launcherConf, "launcher configuration");
-                XConfiguration.copy(launcherConf, conf);
-            } else {
-                XConfiguration launcherConf = new XConfiguration();
-                injectLauncherUseUberMode(launcherConf);
-                XConfiguration.copy(launcherConf, conf);
             }
+            // Inject use uber mode for launcher
+            injectLauncherUseUberMode(launcherConf);
+            XConfiguration.copy(launcherConf, conf);
+            checkForDisallowedProps(launcherConf, "launcher configuration");
             e = actionXml.getChild("config-class", actionXml.getNamespace());
             if (e != null) {
                 conf.set(LauncherMapper.OOZIE_ACTION_CONFIG_CLASS, e.getTextTrim());
@@ -274,6 +294,17 @@ public class JavaActionExecutor extends ActionExecutor {
                 if (ConfigurationService.getBoolean("oozie.action.launcher." + HADOOP_YARN_UBER_MODE)) {
                     launcherConf.setBoolean(HADOOP_YARN_UBER_MODE, true);
                 }
+            }
+        }
+    }
+
+    void injectLauncherTimelineServiceEnabled(Configuration launcherConf, Configuration actionConf) {
+        // Getting delegation token for ATS. If tez-site.xml is present in distributed cache, turn on timeline service.
+        if (actionConf.get("oozie.launcher." + HADOOP_YARN_TIMELINE_SERVICE_ENABLED) == null
+                && ConfigurationService.getBoolean("oozie.action.launcher." + HADOOP_YARN_TIMELINE_SERVICE_ENABLED)) {
+            String cacheFiles = launcherConf.get("mapred.cache.files");
+            if (cacheFiles != null && cacheFiles.contains("tez-site.xml")) {
+                launcherConf.setBoolean(HADOOP_YARN_TIMELINE_SERVICE_ENABLED, true);
             }
         }
     }
@@ -376,6 +407,14 @@ public class JavaActionExecutor extends ActionExecutor {
         }
     }
 
+    void updateConfForJavaTmpDir(Configuration conf) {
+        String amChildOpts = conf.get(YARN_AM_COMMAND_OPTS);
+        String oozieJavaTmpDirSetting = "-Djava.io.tmpdir=./tmp";
+        if (amChildOpts != null && !amChildOpts.contains(JAVA_TMP_DIR_SETTINGS)) {
+            conf.set(YARN_AM_COMMAND_OPTS, amChildOpts + " " + oozieJavaTmpDirSetting);
+        }
+    }
+
     private HashMap<String, List<String>> populateEnvMap(String input) {
         HashMap<String, List<String>> envMaps = new HashMap<String, List<String>>();
         String[] envEntries = input.split(",");
@@ -472,13 +511,16 @@ public class JavaActionExecutor extends ActionExecutor {
             HadoopAccessorService has = Services.get().get(HadoopAccessorService.class);
             XConfiguration actionDefaults = has.createActionDefaultConf(actionConf.get(HADOOP_JOB_TRACKER), getType());
             XConfiguration.injectDefaults(actionDefaults, actionConf);
-
             has.checkSupportedFilesystem(appPath.toUri());
 
             // Set the Java Main Class for the Java action to give to the Java launcher
             setJavaMain(actionConf, actionXml);
 
             parseJobXmlAndConfiguration(context, actionXml, appPath, actionConf);
+
+            // set cancel.delegation.token in actionConf that child job doesn't cancel delegation token
+            actionConf.setBoolean("mapreduce.job.complete.cancel.delegation.tokens", false);
+            updateConfForJavaTmpDir(actionConf);
             return actionConf;
         }
         catch (IOException ex) {
@@ -579,22 +621,76 @@ public class JavaActionExecutor extends ActionExecutor {
 
     protected void addShareLib(Configuration conf, String[] actionShareLibNames)
             throws ActionExecutorException {
+        Set<String> confSet = new HashSet<String>(Arrays.asList(getShareLibFilesForActionConf() == null ? new String[0]
+                : getShareLibFilesForActionConf()));
+
+        Set<Path> sharelibList = new HashSet<Path>();
+
         if (actionShareLibNames != null) {
             try {
                 ShareLibService shareLibService = Services.get().get(ShareLibService.class);
                 FileSystem fs = shareLibService.getFileSystem();
                 if (fs != null) {
-                  for (String actionShareLibName : actionShareLibNames) {
+                    for (String actionShareLibName : actionShareLibNames) {
                         List<Path> listOfPaths = shareLibService.getShareLibJars(actionShareLibName);
                         if (listOfPaths != null && !listOfPaths.isEmpty()) {
-
                             for (Path actionLibPath : listOfPaths) {
-                                JobUtils.addFileToClassPath(actionLibPath, conf, fs);
-                                DistributedCache.createSymlink(conf);
+                                String fragmentName = new URI(actionLibPath.toString()).getFragment();
+                                Path pathWithFragment = fragmentName == null ? actionLibPath : new Path(new URI(
+                                        actionLibPath.toString()).getPath());
+                                String fileName = fragmentName == null ? actionLibPath.getName() : fragmentName;
+                                if (confSet.contains(fileName)) {
+                                    Configuration jobXmlConf = shareLibService.getShareLibConf(actionShareLibName,
+                                            pathWithFragment);
+                                    if (jobXmlConf != null) {
+                                        checkForDisallowedProps(jobXmlConf, actionLibPath.getName());
+                                        XConfiguration.injectDefaults(jobXmlConf, conf);
+                                        LOG.trace("Adding properties of " + actionLibPath + " to job conf");
+                                    }
+                                }
+                                else {
+                                    // Filtering out duplicate jars or files
+                                    sharelibList.add(new Path(actionLibPath.toUri()) {
+                                        @Override
+                                        public int hashCode() {
+                                            return getName().hashCode();
+                                        }
+                                        @Override
+                                        public String getName() {
+                                            try {
+                                                return (new URI(toString())).getFragment() == null ? new Path(toUri()).getName()
+                                                        : (new URI(toString())).getFragment();
+                                            }
+                                            catch (URISyntaxException e) {
+                                                throw new RuntimeException(e);
+                                            }
+                                        }
+                                        @Override
+                                        public boolean equals(Object input) {
+                                            if (input == null) {
+                                                return false;
+                                            }
+                                            if (input == this) {
+                                                return true;
+                                            }
+                                            if (!(input instanceof Path)) {
+                                                return false;
+                                            }
+                                            return getName().equals(((Path) input).getName());
+                                        }
+                                    });
+                                }
                             }
                         }
                     }
                 }
+                for (Path libPath : sharelibList) {
+                    addToCache(conf, libPath, libPath.toUri().getPath(), false);
+                }
+            }
+            catch (URISyntaxException ex) {
+                throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "Error configuring sharelib",
+                        ex.getMessage());
             }
             catch (IOException ex) {
                 throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "It should never happen",
@@ -697,7 +793,7 @@ public class JavaActionExecutor extends ActionExecutor {
         }
 
         addAllShareLibs(appPath, conf, context, actionXml);
-	}
+    }
 
     // Adds action specific share libs and common share libs
     private void addAllShareLibs(Path appPath, Configuration conf, Context context, Element actionXml)
@@ -719,9 +815,18 @@ public class JavaActionExecutor extends ActionExecutor {
                     ioe.getMessage());
         }
         // Action sharelibs are only added if user has specified to use system libpath
-        if (wfJobConf.getBoolean(OozieClient.USE_SYSTEM_LIBPATH, false)) {
-            // add action specific sharelibs
-            addShareLib(conf, getShareLibNames(context, actionXml, conf));
+        if (conf.get(OozieClient.USE_SYSTEM_LIBPATH) == null) {
+            if (wfJobConf.getBoolean(OozieClient.USE_SYSTEM_LIBPATH,
+                    ConfigurationService.getBoolean(OozieClient.USE_SYSTEM_LIBPATH))) {
+                // add action specific sharelibs
+                addShareLib(conf, getShareLibNames(context, actionXml, conf));
+            }
+        }
+        else {
+            if (conf.getBoolean(OozieClient.USE_SYSTEM_LIBPATH, false)) {
+                // add action specific sharelibs
+                addShareLib(conf, getShareLibNames(context, actionXml, conf));
+            }
         }
     }
 
@@ -761,10 +866,39 @@ public class JavaActionExecutor extends ActionExecutor {
 
             // launcher job configuration
             JobConf launcherJobConf = createBaseHadoopConf(context, actionXml);
+            // cancel delegation token on a launcher job which stays alive till child job(s) finishes
+            // otherwise (in mapred action), doesn't cancel not to disturb running child job
+            launcherJobConf.setBoolean("mapreduce.job.complete.cancel.delegation.tokens", true);
             setupLauncherConf(launcherJobConf, actionXml, appPathRoot, context);
 
+            String launcherTag = null;
+            // Extracting tag and appending action name to maintain the uniqueness.
+            if (context.getVar(ActionStartXCommand.OOZIE_ACTION_YARN_TAG) != null) {
+                launcherTag = context.getVar(ActionStartXCommand.OOZIE_ACTION_YARN_TAG);
+            } else { //Keeping it to maintain backward compatibly with test cases.
+                launcherTag = action.getId();
+            }
+
             // Properties for when a launcher job's AM gets restarted
-            LauncherMapperHelper.setupYarnRestartHandling(launcherJobConf, actionConf, action.getId());
+            if (ConfigurationService.getBoolean(HADOOP_YARN_KILL_CHILD_JOBS_ON_AMRESTART)) {
+                // launcher time filter is required to prune the search of launcher tag.
+                // Setting coordinator action nominal time as launcher time as it child job cannot launch before nominal
+                // time. Workflow created time is good enough when workflow is running independently or workflow is
+                // rerunning from failed node.
+                long launcherTime = System.currentTimeMillis();
+                String coordActionNominalTime = context.getProtoActionConf()
+                        .get(CoordActionStartXCommand.OOZIE_COORD_ACTION_NOMINAL_TIME);
+                if (coordActionNominalTime != null) {
+                    launcherTime = Long.parseLong(coordActionNominalTime);
+                } else if (context.getWorkflow().getCreatedTime() != null) {
+                    launcherTime = context.getWorkflow().getCreatedTime().getTime();
+                }
+                LauncherMapperHelper.setupYarnRestartHandling(launcherJobConf, actionConf, launcherTag, launcherTime);
+            }
+            else {
+                LOG.info(MessageFormat.format("{0} is set to false, not setting YARN restart properties",
+                        HADOOP_YARN_KILL_CHILD_JOBS_ON_AMRESTART));
+            }
 
             String actionShareLibProperty = actionConf.get(ACTION_SHARELIB_FOR + getType());
             if (actionShareLibProperty != null) {
@@ -780,6 +914,9 @@ public class JavaActionExecutor extends ActionExecutor {
                         context.getWorkflow().getId());
             launcherJobConf.setJobName(jobName);
             }
+
+            // Inject Oozie job information if enabled.
+            injectJobInfo(launcherJobConf, actionConf, context, action);
 
             String jobId = context.getWorkflow().getId();
             String actionId = action.getId();
@@ -831,21 +968,36 @@ public class JavaActionExecutor extends ActionExecutor {
 
             // setting for uber mode
             if (launcherJobConf.getBoolean(HADOOP_YARN_UBER_MODE, false)) {
-                updateConfForUberMode(launcherJobConf);
+                if (checkPropertiesToDisableUber(launcherJobConf)) {
+                    launcherJobConf.setBoolean(HADOOP_YARN_UBER_MODE, false);
+                }
+                else {
+                    updateConfForUberMode(launcherJobConf);
+                }
             }
+            updateConfForJavaTmpDir(launcherJobConf);
+            injectLauncherTimelineServiceEnabled(launcherJobConf, actionConf);
 
             // properties from action that are needed by the launcher (e.g. QUEUE NAME, ACLs)
             // maybe we should add queue to the WF schema, below job-tracker
             actionConfToLauncherConf(actionConf, launcherJobConf);
-
-            // to disable cancelation of delegation token on launcher job end
-            launcherJobConf.setBoolean("mapreduce.job.complete.cancel.delegation.tokens", false);
 
             return launcherJobConf;
         }
         catch (Exception ex) {
             throw convertException(ex);
         }
+    }
+
+    private boolean checkPropertiesToDisableUber(Configuration launcherConf) {
+        boolean disable = false;
+        if (launcherConf.getBoolean(HADOOP_JOB_CLASSLOADER, false)) {
+            disable = true;
+        }
+        else if (launcherConf.getBoolean(HADOOP_USER_CLASSPATH_FIRST, false)) {
+            disable = true;
+        }
+        return disable;
     }
 
     private void injectCallback(Context context, Configuration conf) {
@@ -886,7 +1038,7 @@ public class JavaActionExecutor extends ActionExecutor {
             Element actionXml = XmlUtils.parseXml(action.getConf());
 
             // action job configuration
-            Configuration actionConf = createBaseHadoopConf(context, actionXml);
+            Configuration actionConf = loadHadoopDefaultResources(context, actionXml);
             setupActionConf(actionConf, context, actionXml, appPathRoot);
             LOG.debug("Setting LibFilesArchives ");
             setLibFilesArchives(context, actionXml, appPathRoot, actionConf);
@@ -912,24 +1064,26 @@ public class JavaActionExecutor extends ActionExecutor {
             }
 
             // Setting the credential properties in launcher conf
+            JobConf credentialsConf = null;
             HashMap<String, CredentialsProperties> credentialsProperties = setCredentialPropertyToActionConf(context,
                     action, actionConf);
+            if (credentialsProperties != null) {
 
-            // Adding if action need to set more credential tokens
-            JobConf credentialsConf = new JobConf(false);
-            XConfiguration.copy(actionConf, credentialsConf);
-            setCredentialTokens(credentialsConf, context, action, credentialsProperties);
+                // Adding if action need to set more credential tokens
+                credentialsConf = new JobConf(false);
+                XConfiguration.copy(actionConf, credentialsConf);
+                setCredentialTokens(credentialsConf, context, action, credentialsProperties);
 
-            // insert conf to action conf from credentialsConf
-            for (Entry<String, String> entry : credentialsConf) {
-                if (actionConf.get(entry.getKey()) == null) {
-                    actionConf.set(entry.getKey(), entry.getValue());
+                // insert conf to action conf from credentialsConf
+                for (Entry<String, String> entry : credentialsConf) {
+                    if (actionConf.get(entry.getKey()) == null) {
+                        actionConf.set(entry.getKey(), entry.getValue());
+                    }
                 }
             }
 
             JobConf launcherJobConf = createLauncherConf(actionFs, context, action, actionXml, actionConf);
 
-            injectJobInfo(launcherJobConf, actionConf, context, action);
             injectLauncherCallback(context, launcherJobConf);
             LOG.debug("Creating Job Client for action " + action.getId());
             jobClient = createJobClient(context, launcherJobConf);
@@ -959,7 +1113,7 @@ public class JavaActionExecutor extends ActionExecutor {
                 launcherJobConf.getCredentials().addToken(HadoopAccessorService.MR_TOKEN_ALIAS, mrdt);
 
                 // insert credentials tokens to launcher job conf if needed
-                if (needInjectCredentials()) {
+                if (needInjectCredentials() && credentialsConf != null) {
                     for (Token<? extends TokenIdentifier> tk : credentialsConf.getCredentials().getAllTokens()) {
                         Text fauxAlias = new Text(tk.getKind() + "_" + tk.getService());
                         LOG.debug("ADDING TOKEN: " + fauxAlias);
@@ -1024,24 +1178,39 @@ public class JavaActionExecutor extends ActionExecutor {
             WorkflowAction action, Configuration actionConf) throws Exception {
         HashMap<String, CredentialsProperties> credPropertiesMap = null;
         if (context != null && action != null) {
-            credPropertiesMap = getActionCredentialsProperties(context, action);
-            if (credPropertiesMap != null) {
-                for (String key : credPropertiesMap.keySet()) {
-                    CredentialsProperties prop = credPropertiesMap.get(key);
-                    if (prop != null) {
-                        LOG.debug("Credential Properties set for action : " + action.getId());
-                        for (String property : prop.getProperties().keySet()) {
-                            actionConf.set(property, prop.getProperties().get(property));
-                            LOG.debug("property : '" + property + "', value : '" + prop.getProperties().get(property) + "'");
-                        }
-                    }
+            if (!"true".equals(actionConf.get(OOZIE_CREDENTIALS_SKIP))) {
+                XConfiguration wfJobConf = null;
+                try {
+                    wfJobConf = new XConfiguration(new StringReader(context.getWorkflow().getConf()));
+                } catch (IOException ioe) {
+                    throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "It should never happen",
+                            ioe.getMessage());
                 }
+                if ("false".equals(actionConf.get(OOZIE_CREDENTIALS_SKIP)) ||
+                    !wfJobConf.getBoolean(OOZIE_CREDENTIALS_SKIP, ConfigurationService.getBoolean(OOZIE_CREDENTIALS_SKIP))) {
+                    credPropertiesMap = getActionCredentialsProperties(context, action);
+                    if (credPropertiesMap != null) {
+                        for (String key : credPropertiesMap.keySet()) {
+                            CredentialsProperties prop = credPropertiesMap.get(key);
+                            if (prop != null) {
+                                LOG.debug("Credential Properties set for action : " + action.getId());
+                                for (String property : prop.getProperties().keySet()) {
+                                    actionConf.set(property, prop.getProperties().get(property));
+                                    LOG.debug("property : '" + property + "', value : '" + prop.getProperties().get(property)
+                                            + "'");
+                                }
+                            }
+                        }
+                    } else {
+                        LOG.warn("No credential properties found for action : " + action.getId() + ", cred : " + action.getCred());
+                    }
+                } else {
+                    LOG.info("Skipping credentials (" + OOZIE_CREDENTIALS_SKIP + "=true)");
+                }
+            } else {
+                LOG.info("Skipping credentials (" + OOZIE_CREDENTIALS_SKIP + "=true)");
             }
-            else {
-                LOG.warn("No credential properties found for action : " + action.getId() + ", cred : " + action.getCred());
-            }
-        }
-        else {
+        } else {
             LOG.warn("context or action is null");
         }
         return credPropertiesMap;
@@ -1189,6 +1358,15 @@ public class JavaActionExecutor extends ActionExecutor {
         return runningJob;
     }
 
+    /**
+     * Useful for overriding in actions that do subsequent job runs
+     * such as the MapReduce Action, where the launcher job is not the
+     * actual job that then gets monitored.
+     */
+    protected String getActualExternalId(WorkflowAction action) {
+        return action.getExternalId();
+    }
+
     @Override
     public void check(Context context, WorkflowAction action) throws ActionExecutorException {
         JobClient jobClient = null;
@@ -1204,7 +1382,7 @@ public class JavaActionExecutor extends ActionExecutor {
                 context.setExecutionData(FAILED, null);
                 throw new ActionExecutorException(ActionExecutorException.ErrorType.FAILED, "JA017",
                         "Could not lookup launched hadoop Job ID [{0}] which was associated with " +
-                        " action [{1}].  Failing this action!", action.getExternalId(), action.getId());
+                        " action [{1}].  Failing this action!", getActualExternalId(action), action.getId());
             }
             if (runningJob.isComplete()) {
                 Path actionDir = context.getActionDir();
@@ -1332,6 +1510,16 @@ public class JavaActionExecutor extends ActionExecutor {
             throws HadoopAccessorException, JDOMException, IOException, URISyntaxException {
     }
 
+    protected final void readExternalChildIDs(WorkflowAction action, Context context) throws IOException {
+        if (action.getData() != null) {
+            // Load stored Hadoop jobs ids and promote them as external child ids
+            // See LauncherMain#writeExternalChildIDs for how they are written
+            Properties props = new Properties();
+            props.load(new StringReader(action.getData()));
+            context.setExternalChildIDs((String) props.get(LauncherMain.HADOOP_JOBS));
+        }
+    }
+
     protected boolean getCaptureOutput(WorkflowAction action) throws JDOMException {
         Element eConf = XmlUtils.parseXml(action.getConf());
         Namespace ns = eConf.getNamespace();
@@ -1394,15 +1582,15 @@ public class JavaActionExecutor extends ActionExecutor {
 
     /**
      * Return the sharelib names for the action.
-     * <p/>
+     * <p>
      * If <code>NULL</code> or empty, it means that the action does not use the action
      * sharelib.
-     * <p/>
+     * <p>
      * If a non-empty string, i.e. <code>foo</code>, it means the action uses the
      * action sharelib sub-directory <code>foo</code> and all JARs in the sharelib
      * <code>foo</code> directory will be in the action classpath. Multiple sharelib
      * sub-directories can be specified as a comma separated list.
-     * <p/>
+     * <p>
      * The resolution is done using the following precedence order:
      * <ul>
      *     <li><b>action.sharelib.for.#ACTIONTYPE#</b> in the action configuration</li>
@@ -1453,6 +1641,10 @@ public class JavaActionExecutor extends ActionExecutor {
         return null;
     }
 
+    public String[] getShareLibFilesForActionConf() {
+        return null;
+    }
+
     /**
      * Sets some data for the action on completion
      *
@@ -1476,5 +1668,13 @@ public class JavaActionExecutor extends ActionExecutor {
                 LOG.error("Error while populating job info", e);
             }
         }
+    }
+
+    public boolean requiresNameNodeJobTracker() {
+        return true;
+    }
+
+    public boolean supportsConfigurationJobXML() {
+        return true;
     }
 }

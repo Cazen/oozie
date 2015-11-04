@@ -67,6 +67,7 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
     public static final String COULD_NOT_START = "COULD_NOT_START";
     public static final String START_DATA_MISSING = "START_DATA_MISSING";
     public static final String EXEC_DATA_MISSING = "EXEC_DATA_MISSING";
+    public static final String OOZIE_COORD_ACTION_NOMINAL_TIME = "oozie.coord.action.nominal_time";
 
     private final XLog log = getLog();
     private String actionId = null;
@@ -120,6 +121,7 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
         Configuration runConf = null;
         try {
             runConf = new XConfiguration(new StringReader(createdConf));
+
         }
         catch (IOException e1) {
             log.warn("Configuration parse error in:" + createdConf);
@@ -151,9 +153,25 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
         // new property called 'oozie.wf.application.path'
         // WF Engine requires the path to the workflow.xml to be saved under
         // this property name
-        String appPath = workflowProperties.getChild("action", workflowProperties.getNamespace()).getChild("workflow",
-                                                                                                           workflowProperties.getNamespace()).getChild("app-path", workflowProperties.getNamespace()).getValue();
+        String appPath = workflowProperties.getChild("action", workflowProperties.getNamespace())
+                .getChild("workflow", workflowProperties.getNamespace()).getChild("app-path",
+                        workflowProperties.getNamespace()).getValue();
+
+        // Copying application path in runconf.
         runConf.set("oozie.wf.application.path", appPath);
+
+        // Step 4: Extract the runconf and copy the rerun config to runconf.
+        if (runConf.get(CoordRerunXCommand.RERUN_CONF) != null) {
+            Configuration rerunConf = null;
+            try {
+                rerunConf = new XConfiguration(new StringReader(runConf.get(CoordRerunXCommand.RERUN_CONF)));
+                XConfiguration.copy(rerunConf, runConf);
+            } catch (IOException e) {
+                log.warn("Configuration parse error in:" + rerunConf);
+                throw new CommandException(ErrorCode.E1005, e.getMessage(), e);
+            }
+            runConf.unset(CoordRerunXCommand.RERUN_CONF);
+        }
         return runConf;
     }
 
@@ -190,6 +208,8 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
                     conf.setBoolean(OozieClient.RERUN_FAIL_NODES, true);
                     dagEngine.reRun(coordAction.getExternalId(), conf);
                 } else {
+                    // Pushing the nominal time in conf to use for launcher tag search
+                    conf.set(OOZIE_COORD_ACTION_NOMINAL_TIME,String.valueOf(coordAction.getNominalTime().getTime()));
                     String wfId = dagEngine.submitJobFromCoordinator(conf, actionId);
                     coordAction.setExternalId(wfId);
                 }
@@ -210,6 +230,7 @@ public class CoordActionStartXCommand extends CoordinatorXCommand<Void> {
                             CoordActionQuery.UPDATE_COORD_ACTION_FOR_START, coordAction));
                     try {
                         executor.executeBatchInsertUpdateDelete(insertList, updateList, null);
+                        queue(new CoordActionNotificationXCommand(coordAction), 100);
                         if (EventHandlerService.isEnabled()) {
                             generateEvent(coordAction, user, appName, wfJob.getStartTime());
                         }

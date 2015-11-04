@@ -59,7 +59,7 @@ public class DateUtils {
 
     /**
      * Configures the Datetime parsing with Oozie processing timezone.
-     * <p/>
+     * <p>
      * The {@link #OOZIE_PROCESSING_TIMEZONE_KEY} property is read and set as the Oozie processing timezone.
      * Valid values for this property are <code>UTC</code> and <code>GMT(+/-)####</code>
      *
@@ -87,7 +87,7 @@ public class DateUtils {
 
     /**
      * Returns Oozie processing datetime mask.
-     * <p/>
+     * <p>
      * This mask is an ISO8601 datetime mask for the Oozie processing timezone.
      *
      * @return  Oozie processing datetime mask.
@@ -193,7 +193,7 @@ public class DateUtils {
 
     /**
      * Formats a {@link Date} as a string using the specified format mask.
-     * <p/>
+     * <p>
      * The format mask must be a {@link SimpleDateFormat} valid format mask.
      *
      * @param d {@link Date} to format.
@@ -213,6 +213,18 @@ public class DateUtils {
      */
     public static String formatDateOozieTZ(Calendar c) {
         return (c != null) ? formatDateOozieTZ(c.getTime()) : "NULL";
+    }
+
+    /**
+     * Formats a {@link Calendar} as a string in ISO8601 format without adjusting its timezone.  However, the mask will still
+     * ensure that the returned date is in the Oozie processing timezone.
+     *
+     * @param c {@link Calendar} to format.
+     * @return the ISO8601 string for the given date, <code>NULL</code> if the {@link Calendar} instance was
+     * <code>NULL</code>
+     */
+    public static String formatDate(Calendar c) {
+        return (c != null) ? getISO8601DateFormat(c.getTimeZone(), ACTIVE_MASK).format(c.getTime()) : "NULL";
     }
 
     /**

@@ -20,6 +20,7 @@ package org.apache.oozie.action.hadoop;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.filecache.DistributedCache;
+import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.mapred.JobConf;
@@ -29,6 +30,7 @@ import org.apache.hadoop.mapred.JobID;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.client.WorkflowAction;
+import org.apache.oozie.service.ConfigurationService;
 import org.apache.oozie.service.URIHandlerService;
 import org.apache.oozie.service.WorkflowAppService;
 import org.apache.oozie.service.Services;
@@ -76,6 +78,13 @@ public class TestPigActionExecutor extends ActionExecutorTestCase {
     protected void setUp() throws Exception {
         System.setProperty("oozie.test.metastore.server", "false");
         super.setUp();
+        PigTestCase.resetPigStats();
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        PigTestCase.resetPigStats();
+        super.tearDown();
     }
 
     @Override
@@ -246,6 +255,19 @@ public class TestPigActionExecutor extends ActionExecutorTestCase {
         assertTrue(q.containsKey("HADOOP_COUNTERS"));
     }
 
+
+    public void testActionConfLoadDefaultResources() throws Exception {
+        ConfigurationService.setBoolean(
+                "oozie.service.HadoopAccessorService.action.configurations.load.default.resources", false);
+        String actionXml = setPigActionXml(PIG_SCRIPT, true);
+        Context context = createContext(actionXml);
+        submitAction(context);
+        FileSystem fs = getFileSystem();
+        FSDataInputStream os = fs.open(new Path(context.getActionDir(), LauncherMapper.ACTION_CONF_XML));
+        XConfiguration conf = new XConfiguration();
+        conf.addResource(os);
+        assertNull(conf.get("oozie.HadoopAccessorService.created"));
+    }
 
     /*
      * Test the Hadoop IDs obtained from the Pig job

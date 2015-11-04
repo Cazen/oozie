@@ -26,6 +26,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
 
 import org.apache.hadoop.conf.Configuration;
@@ -73,17 +74,17 @@ import org.jdom.JDOMException;
 
 /**
  * Rerun coordinator actions by a list of dates or ids. User can specify if refresh or noCleanup.
- * <p/>
- * The "rerunType" can be set as {@link RestConstants.JOB_COORD_RERUN_DATE} or
- * {@link RestConstants.JOB_COORD_RERUN_ACTION}.
- * <p/>
+ * <p>
+ * The "rerunType" can be set as {@link RestConstants#JOB_COORD_SCOPE_DATE} or {@link RestConstants#JOB_COORD_SCOPE_ACTION}.
+ * <p>
  * The "refresh" is used to indicate if user wants to refresh an action's input and output events.
- * <p/>
+ * <p>
  * The "noCleanup" is used to indicate if user wants to cleanup output events for given rerun actions
  */
 @SuppressWarnings("deprecation")
 public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActionInfo> {
 
+    public static final String RERUN_CONF = "rerunConf";
     private String rerunType;
     private String scope;
     private boolean refresh;
@@ -91,18 +92,21 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
     private CoordinatorJobBean coordJob = null;
     protected boolean prevPending;
     private boolean failed;
+    private Configuration actionRunConf;
 
     /**
      * The constructor for class {@link CoordRerunXCommand}
      *
      * @param jobId the job id
-     * @param rerunType rerun type {@link RestConstants.JOB_COORD_RERUN_DATE} or {@link RestConstants.JOB_COORD_RERUN_ACTION}
+     * @param rerunType rerun type {@link RestConstants#JOB_COORD_SCOPE_DATE} or {@link RestConstants#JOB_COORD_SCOPE_ACTION}
      * @param scope the rerun scope for given rerunType separated by ","
      * @param refresh true if user wants to refresh input/output dataset urls
      * @param noCleanup false if user wants to cleanup output events for given rerun actions
+     * @param failed true if user wants to rerun only failed nodes
+     * @param actionRunConf configuration values for actions
      */
     public CoordRerunXCommand(String jobId, String rerunType, String scope, boolean refresh, boolean noCleanup,
-                              boolean failed) {
+                              boolean failed, Configuration actionRunConf) {
         super("coord_rerun", "coord_rerun", 1);
         this.jobId = ParamChecker.notEmpty(jobId, "jobId");
         this.rerunType = ParamChecker.notEmpty(rerunType, "rerunType");
@@ -110,12 +114,13 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         this.refresh = refresh;
         this.noCleanup = noCleanup;
         this.failed = failed;
+        this.actionRunConf = actionRunConf;
     }
 
     /**
      * Check if all given actions are eligible to rerun.
      *
-     * @param actions list of CoordinatorActionBean
+     * @param coordActions list of CoordinatorActionBean
      * @return true if all actions are eligible to rerun
      */
     private static boolean checkAllActionsRunnable(List<CoordinatorActionBean> coordActions) {
@@ -135,38 +140,30 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
      * Cleanup output-events directories
      *
      * @param eAction coordinator action xml
-     * @param user user name
-     * @param group group name
      */
     @SuppressWarnings("unchecked")
-    private void cleanupOutputEvents(Element eAction, String user, String group, CoordinatorAction action)
+    private void cleanupOutputEvents(Element eAction, Configuration coordJobConf, Map<String, Context> uriHandlerContextMap)
             throws CommandException {
         Element outputList = eAction.getChild("output-events", eAction.getNamespace());
         if (outputList != null) {
+
             for (Element data : (List<Element>) outputList.getChildren("data-out", eAction.getNamespace())) {
-                if (data.getChild("uris", data.getNamespace()) != null) {
+                String nocleanup = data.getAttributeValue("nocleanup");
+                if (data.getChild("uris", data.getNamespace()) != null
+                        && (nocleanup == null || !nocleanup.equals("true"))) {
                     String uris = data.getChild("uris", data.getNamespace()).getTextTrim();
                     if (uris != null) {
                         String[] uriArr = uris.split(CoordELFunctions.INSTANCE_SEPARATOR);
-                        Configuration actionConf = null;
-                        try {
-                            actionConf = new XConfiguration(new StringReader(coordJob.getConf()));
-                        }
-                        catch (IOException e) {
-                            throw new CommandException(ErrorCode.E0907,
-                                    "failed to read coord job conf to clean up output data");
-                        }
-                        HashMap<String, Context> contextMap = new HashMap<String, Context>();
                         try {
                             for (String uriStr : uriArr) {
                                 URI uri = new URI(uriStr);
                                 URIHandler handler = Services.get().get(URIHandlerService.class).getURIHandler(uri);
                                 String schemeWithAuthority = uri.getScheme() + "://" + uri.getAuthority();
-                                if (!contextMap.containsKey(schemeWithAuthority)) {
-                                    Context context = handler.getContext(uri, actionConf, user, false);
-                                    contextMap.put(schemeWithAuthority, context);
+                                if (!uriHandlerContextMap.containsKey(schemeWithAuthority)) {
+                                    Context context = handler.getContext(uri, coordJobConf, coordJob.getUser(), false);
+                                    uriHandlerContextMap.put(schemeWithAuthority, context);
                                 }
-                                handler.delete(uri, contextMap.get(schemeWithAuthority));
+                                handler.delete(uri, uriHandlerContextMap.get(schemeWithAuthority));
                                 LOG.info("Cleanup the output data " + uri.toString());
                             }
                         }
@@ -176,18 +173,10 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
                         catch (URIHandlerException e) {
                             throw new CommandException(ErrorCode.E0907, e.getMessage());
                         }
-                        finally {
-                            Iterator<Entry<String, Context>> itr = contextMap.entrySet().iterator();
-                            while (itr.hasNext()) {
-                                Entry<String, Context> entry = itr.next();
-                                entry.getValue().destroy();
-                                itr.remove();
-                            }
-                        }
                     }
-
                 }
             }
+
         }
         else {
             LOG.info("No output-events defined in coordinator xml. Therefore nothing to cleanup");
@@ -243,6 +232,18 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
         coordAction.setLastModifiedTime(new Date());
         coordAction.setErrorCode("");
         coordAction.setErrorMessage("");
+
+        // Pushing the configuration which passed through rerun.
+        if(actionRunConf != null && actionRunConf.size() > 0) {
+            Configuration createdConf = null;
+            if(coordAction.getCreatedConf() != null ) {
+                createdConf = new XConfiguration(new StringReader(coordAction.getCreatedConf()));
+            } else {
+                createdConf = new Configuration();
+            }
+            createdConf.set(RERUN_CONF, XmlUtils.prettyPrint(actionRunConf).toString());
+            coordAction.setCreatedConf(XmlUtils.prettyPrint(createdConf).toString());
+        }
         updateList.add(new UpdateEntry<CoordActionQuery>(CoordActionQuery.UPDATE_COORD_ACTION_RERUN, coordAction));
         writeActionRegistration(coordAction.getActionXml(), coordAction, coordJob.getUser(), coordJob.getGroup());
     }
@@ -347,21 +348,42 @@ public class CoordRerunXCommand extends RerunTransitionXCommand<CoordinatorActio
             InstrumentUtils.incrJobCounter(getName(), 1, getInstrumentation());
             List<CoordinatorActionBean> coordActions = CoordUtils.getCoordActions(rerunType, jobId, scope, false);
             if (checkAllActionsRunnable(coordActions)) {
-                for (CoordinatorActionBean coordAction : coordActions) {
-                    String actionXml = coordAction.getActionXml();
-                    if (!noCleanup) {
-                        Element eAction = XmlUtils.parseXml(actionXml);
-                        cleanupOutputEvents(eAction, coordJob.getUser(), coordJob.getGroup(), coordAction);
+                Map<String, Context> uriHandlerContextMap = new HashMap<String, Context>();
+                Configuration coordJobConf = null;
+                try {
+                    coordJobConf = new XConfiguration(new StringReader(coordJob.getConf()));
+                }
+                catch (IOException e) {
+                    throw new CommandException(ErrorCode.E0907, "failed to read coord job conf to clean up output data");
+                }
+                try {
+                    for (CoordinatorActionBean coordAction : coordActions) {
+                        String actionXml = coordAction.getActionXml();
+                        if (!noCleanup) {
+                            Element eAction = XmlUtils.parseXml(actionXml);
+                            cleanupOutputEvents(eAction, coordJobConf, uriHandlerContextMap);
+                        }
+                        if (refresh) {
+                            refreshAction(coordJob, coordAction);
+                        }
+                        updateAction(coordJob, coordAction);
+                        if (SLAService.isEnabled()) {
+                            SLAOperations.updateRegistrationEvent(coordAction.getId());
+                        }
+                        queue(new CoordActionNotificationXCommand(coordAction), 100);
+                        queue(new CoordActionInputCheckXCommand(coordAction.getId(), coordAction.getJobId()), 100);
+                        if (coordAction.getPushMissingDependencies() != null) {
+                            queue(new CoordPushDependencyCheckXCommand(coordAction.getId(), true), 100);
+                        }
                     }
-                    if (refresh) {
-                        refreshAction(coordJob, coordAction);
+                }
+                finally {
+                    Iterator<Entry<String, Context>> itr = uriHandlerContextMap.entrySet().iterator();
+                    while (itr.hasNext()) {
+                        Entry<String, Context> entry = itr.next();
+                        entry.getValue().destroy();
+                        itr.remove();
                     }
-                    updateAction(coordJob, coordAction);
-                    if (SLAService.isEnabled()) {
-                        SLAOperations.updateRegistrationEvent(coordAction.getId());
-                    }
-                    queue(new CoordActionNotificationXCommand(coordAction), 100);
-                    queue(new CoordActionInputCheckXCommand(coordAction.getId(), coordAction.getJobId()), 100);
                 }
             }
             else {

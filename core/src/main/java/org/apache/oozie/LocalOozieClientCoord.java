@@ -37,22 +37,22 @@ import org.apache.oozie.util.XConfiguration;
 /**
  * Client API to submit and manage Oozie coordinator jobs against an Oozie
  * intance.
- * <p/>
+ * <p>
  * This class is thread safe.
- * <p/>
+ * <p>
  * Syntax for filter for the {@link #getJobsInfo(String)}
  * {@link #getJobsInfo(String, int, int)} methods:
  * <code>[NAME=VALUE][;NAME=VALUE]*</code>.
- * <p/>
+ * <p>
  * Valid filter names are:
- * <p/>
- * <ul/>
+ * <p>
+ * <ul>
  * <li>name: the coordinator application name from the coordinator definition.</li>
  * <li>user: the user that submitted the job.</li>
  * <li>group: the group for the job.</li>
  * <li>status: the status of the job.</li>
  * </ul>
- * <p/>
+ * <p>
  * The query will do an AND among all the filter names. The query will do an OR
  * among all the filter values for the same name. Multiple values must be
  * specified as different name value pairs.
@@ -63,7 +63,7 @@ public class LocalOozieClientCoord extends OozieClient {
 
     /**
      * Create a coordinator client for Oozie local use.
-     * <p/>
+     * <p>
      *
      * @param coordEngine the engine instance to use.
      */
@@ -73,7 +73,7 @@ public class LocalOozieClientCoord extends OozieClient {
 
     /**
      * Return the Oozie URL of the coordinator client instance.
-     * <p/>
+     * <p>
      * This URL is the base URL fo the Oozie system, with not protocol
      * versioning.
      *
@@ -86,7 +86,7 @@ public class LocalOozieClientCoord extends OozieClient {
 
     /**
      * Return the Oozie URL used by the client and server for WS communications.
-     * <p/>
+     * <p>
      * This URL is the original URL plus the versioning element path.
      *
      * @return the Oozie URL used by the client and server for communication.
@@ -253,7 +253,7 @@ public class LocalOozieClientCoord extends OozieClient {
     @Override
     public List<CoordinatorAction> reRunCoord(String jobId, String rerunType, String scope, boolean refresh,
                                               boolean noCleanup) throws OozieClientException {
-        return getCoordinatorActions(jobId, rerunType, scope, refresh, noCleanup, false);
+        return getCoordinatorActions(jobId, rerunType, scope, refresh, noCleanup, false, null);
     }
 
     /**
@@ -266,23 +266,28 @@ public class LocalOozieClientCoord extends OozieClient {
      * @param refresh true if -refresh is given in command option
      * @param noCleanup true if -nocleanup is given in command option
      * @param failed true if -failed is given in command option
+     * @param conf configuration information for the rerun
      * @throws OozieClientException
      */
     @Override
     public List<CoordinatorAction> reRunCoord(String jobId, String rerunType, String scope, boolean refresh,
-            boolean noCleanup, boolean failed) throws OozieClientException {
-        return getCoordinatorActions(jobId, rerunType, scope, refresh, noCleanup, failed);
+            boolean noCleanup, boolean failed, Properties conf ) throws OozieClientException {
+        return getCoordinatorActions(jobId, rerunType, scope, refresh, noCleanup, failed, conf);
     }
 
     private List<CoordinatorAction> getCoordinatorActions(String jobId, String rerunType, String scope, boolean refresh,
-            boolean noCleanup, boolean failed) throws OozieClientException {
+            boolean noCleanup, boolean failed, Properties prop) throws OozieClientException {
         try {
+            XConfiguration conf = null;
+            if (prop != null) {
+                conf = new XConfiguration(prop);
+            }
             if (!(rerunType.equals(RestConstants.JOB_COORD_SCOPE_DATE) || rerunType
                     .equals(RestConstants.JOB_COORD_SCOPE_ACTION))) {
                 throw new CommandException(ErrorCode.E1018, "date or action expected.");
             }
             CoordinatorActionInfo coordInfo = coordEngine.reRun(jobId, rerunType, scope, Boolean.valueOf(refresh),
-                    Boolean.valueOf(noCleanup), Boolean.valueOf(failed));
+                    Boolean.valueOf(noCleanup), Boolean.valueOf(failed), conf);
             List<CoordinatorActionBean> actionBeans;
             if (coordInfo != null) {
                 actionBeans = coordInfo.getCoordActions();
@@ -458,7 +463,7 @@ public class LocalOozieClientCoord extends OozieClient {
 
     /**
      * Return the info of the workflow jobs that match the filter.
-     * <p/>
+     * <p>
      * It returns the first 100 jobs that match the filter.
      *
      * @param filter job filter. Refer to the {@link LocalOozieClient} for the

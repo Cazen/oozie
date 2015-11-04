@@ -44,4 +44,8 @@ public class HadoopShims {
     public void createSymlink(Path target, Path link, boolean createParent) throws IOException {
     }
 
+    public static boolean isYARN() {
+        return false;
+    }
+
 }

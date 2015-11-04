@@ -21,6 +21,7 @@ package org.apache.oozie.servlet;
 import org.apache.hadoop.security.authentication.server.AuthenticationFilter;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.service.Services;
+import org.apache.hadoop.security.SecurityUtil;
 
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
@@ -32,6 +33,8 @@ import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Properties;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import org.apache.oozie.service.JobsConcurrencyService;
 import org.apache.oozie.util.ZKUtils;
 
@@ -41,6 +44,7 @@ import org.apache.oozie.util.ZKUtils;
  */
 public class AuthFilter extends AuthenticationFilter {
     public static final String OOZIE_PREFIX = "oozie.authentication.";
+    private static final String KERBEROS_PRINCIPAL_CONFIG = "kerberos.principal";
 
     private HttpServlet optionsServlet;
     private ZKUtils zkUtils = null;
@@ -81,7 +85,7 @@ public class AuthFilter extends AuthenticationFilter {
 
     /**
      * Returns the configuration from Oozie configuration to be used by the authentication filter.
-     * <p/>
+     * <p>
      * All properties from Oozie configuration which name starts with {@link #OOZIE_PREFIX} will
      * be returned. The keys of the returned properties are trimmed from the {@link #OOZIE_PREFIX}
      * prefix, for example the Oozie configuration property name 'oozie.authentication.type' will
@@ -105,7 +109,19 @@ public class AuthFilter extends AuthenticationFilter {
             if (name.startsWith(OOZIE_PREFIX)) {
                 String value = conf.get(name);
                 name = name.substring(OOZIE_PREFIX.length());
-                props.setProperty(name, value);
+                if (name.equals(KERBEROS_PRINCIPAL_CONFIG)) {
+                    String hostName = "localhost";
+                    String principal = value;
+                    try {
+                        hostName = InetAddress.getLocalHost().getCanonicalHostName();
+                        principal = SecurityUtil.getServerPrincipal(value, hostName);
+                    } catch (IOException ioe) {
+                       // ignore.
+                    }
+                    props.setProperty(name, principal);
+                 } else {
+                    props.setProperty(name, value);
+                }
             }
         }
 
@@ -127,7 +143,7 @@ public class AuthFilter extends AuthenticationFilter {
 
     /**
      * Enforces authentication using Hadoop-auth AuthenticationFilter.
-     * <p/>
+     * <p>
      * This method is overriden to respond to HTTP OPTIONS requests for authenticated calls, regardless
      * of the target servlet supporting OPTIONS or not and to inject the authenticated user name as
      * request attribute for Oozie to retrieve the user id.

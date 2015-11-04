@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.BundleActionBean;
 import org.apache.oozie.BundleJobBean;
 import org.apache.oozie.CoordinatorJobBean;
@@ -48,9 +49,9 @@ import org.apache.oozie.util.XLog;
 
 /**
  * Rerun bundle coordinator jobs by a list of coordinator names or dates. User can specify if refresh or noCleanup.
- * <p/>
+ * <p>
  * The "refresh" is used to indicate if user wants to refresh an action's input/outpur dataset urls
- * <p/>
+ * <p>
  * The "noCleanup" is used to indicate if user wants to cleanup output events for given rerun actions
  */
 public class BundleRerunXCommand extends RerunTransitionXCommand<Void> {
@@ -139,7 +140,7 @@ public class BundleRerunXCommand extends RerunTransitionXCommand<Void> {
                     LOG.debug("Queuing rerun range [" + rerunDateScope + "] for coord id " + coordId + " of bundle "
                             + bundleJob.getId());
                     queue(new CoordRerunXCommand(coordId, RestConstants.JOB_COORD_SCOPE_DATE, rerunDateScope, refresh,
-                            noCleanup, false));
+                            noCleanup, false, null));
                     updateBundleAction(coordNameToBAMapping.get(coordName));
                     isUpdateActionDone = true;
                 }
@@ -159,7 +160,7 @@ public class BundleRerunXCommand extends RerunTransitionXCommand<Void> {
                     LOG.debug("Queuing rerun range [" + dateScope + "] for coord id " + action.getCoordId() + " of bundle "
                             + bundleJob.getId());
                     queue(new CoordRerunXCommand(action.getCoordId(), RestConstants.JOB_COORD_SCOPE_DATE, dateScope,
-                            refresh, noCleanup, false));
+                            refresh, noCleanup, false, null));
                     updateBundleAction(action);
                     isUpdateActionDone = true;
                 }

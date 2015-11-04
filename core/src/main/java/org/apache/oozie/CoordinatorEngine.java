@@ -19,14 +19,17 @@
 package org.apache.oozie;
 
 import com.google.common.annotations.VisibleForTesting;
+
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.oozie.BaseEngine.LOG_TYPE;
 import org.apache.oozie.client.CoordinatorAction;
 import org.apache.oozie.client.CoordinatorJob;
 import org.apache.oozie.client.OozieClient;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.client.rest.RestConstants;
 import org.apache.oozie.command.CommandException;
+import org.apache.oozie.command.coord.BulkCoordXCommand;
 import org.apache.oozie.command.coord.CoordActionInfoXCommand;
 import org.apache.oozie.command.coord.CoordActionsIgnoreXCommand;
 import org.apache.oozie.command.coord.CoordActionsKillXCommand;
@@ -36,9 +39,13 @@ import org.apache.oozie.command.coord.CoordJobsXCommand;
 import org.apache.oozie.command.coord.CoordKillXCommand;
 import org.apache.oozie.command.coord.CoordRerunXCommand;
 import org.apache.oozie.command.coord.CoordResumeXCommand;
+import org.apache.oozie.command.coord.CoordSLAAlertsDisableXCommand;
+import org.apache.oozie.command.coord.CoordSLAAlertsEnableXCommand;
+import org.apache.oozie.command.coord.CoordSLAChangeXCommand;
 import org.apache.oozie.command.coord.CoordSubmitXCommand;
 import org.apache.oozie.command.coord.CoordSuspendXCommand;
 import org.apache.oozie.command.coord.CoordUpdateXCommand;
+import org.apache.oozie.command.OperationType;
 import org.apache.oozie.executor.jpa.CoordActionQueryExecutor;
 import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
 import org.apache.oozie.executor.jpa.JPAExecutorException;
@@ -49,9 +56,11 @@ import org.apache.oozie.service.Services;
 import org.apache.oozie.service.XLogStreamingService;
 import org.apache.oozie.util.CoordActionsInDateRange;
 import org.apache.oozie.util.DateUtils;
+import org.apache.oozie.util.JobUtils;
 import org.apache.oozie.util.Pair;
 import org.apache.oozie.util.ParamChecker;
 import org.apache.oozie.util.XLog;
+import org.apache.oozie.util.XLogAuditFilter;
 import org.apache.oozie.util.XLogFilter;
 import org.apache.oozie.util.XLogUserFilterParam;
 
@@ -261,11 +270,11 @@ public class CoordinatorEngine extends BaseEngine {
      * @throws BaseEngineException
      */
     public CoordinatorActionInfo reRun(String jobId, String rerunType, String scope, boolean refresh, boolean noCleanup,
-                                       boolean failed)
+                                       boolean failed, Configuration conf)
             throws BaseEngineException {
         try {
             return new CoordRerunXCommand(jobId, rerunType, scope, refresh,
-                    noCleanup, failed).call();
+                    noCleanup, failed, conf).call();
         }
         catch (CommandException ex) {
             throw new BaseEngineException(ex);
@@ -293,18 +302,42 @@ public class CoordinatorEngine extends BaseEngine {
         throw new BaseEngineException(new XException(ErrorCode.E0301, "invalid use of start"));
     }
 
-    /*
-     * (non-Javadoc)
-     *
-     * @see org.apache.oozie.BaseEngine#streamLog(java.lang.String,
-     * java.io.Writer)
-     */
     @Override
     public void streamLog(String jobId, Writer writer, Map<String, String[]> params) throws IOException,
             BaseEngineException {
+        streamJobLog(jobId, writer, params, LOG_TYPE.LOG);
+    }
 
+    @Override
+    public void streamErrorLog(String jobId, Writer writer, Map<String, String[]> params) throws IOException,
+            BaseEngineException {
+        streamJobLog(jobId, writer, params, LOG_TYPE.ERROR_LOG);
+    }
+
+    @Override
+    public void streamAuditLog(String jobId, Writer writer, Map<String, String[]> params) throws IOException,
+    BaseEngineException {
         try {
-            XLogFilter filter = new XLogFilter(new XLogUserFilterParam(params));
+            streamJobLog(new XLogAuditFilter(new XLogUserFilterParam(params)), jobId, writer, params, LOG_TYPE.AUDIT_LOG);
+        }
+        catch (CommandException e) {
+            throw new IOException(e);
+        }
+    }
+
+    private void streamJobLog(String jobId, Writer writer, Map<String, String[]> params, LOG_TYPE logType)
+            throws IOException, BaseEngineException {
+        try {
+            streamJobLog(new XLogFilter(new XLogUserFilterParam(params)), jobId, writer, params, logType);
+        }
+        catch (Exception e) {
+            throw new IOException(e);
+        }
+    }
+
+    private void streamJobLog(XLogFilter filter, String jobId, Writer writer, Map<String, String[]> params, LOG_TYPE logType)
+            throws IOException, BaseEngineException {
+        try {
             filter.setParameter(DagXLogInfoService.JOB, jobId);
             Date lastTime = null;
             CoordinatorJobBean job = getCoordJobWithNoActionInfo(jobId);
@@ -314,8 +347,7 @@ public class CoordinatorEngine extends BaseEngine {
             if (lastTime == null) {
                 lastTime = new Date();
             }
-            Services.get().get(XLogStreamingService.class)
-                    .streamLog(filter, job.getCreatedTime(), lastTime, writer, params);
+            fetchLog(filter, job.getCreatedTime(), lastTime, writer, params, logType);
         }
         catch (Exception e) {
             throw new IOException(e);
@@ -834,6 +866,117 @@ public class CoordinatorEngine extends BaseEngine {
         }
         catch (JPAExecutorException e) {
             throw new CoordinatorEngineException(e);
+        }
+    }
+
+    @Override
+    public void disableSLAAlert(String id, String actions, String dates, String childIds) throws BaseEngineException {
+        try {
+            new CoordSLAAlertsDisableXCommand(id, actions, dates).call();
+
+        }
+        catch (CommandException e) {
+            throw new CoordinatorEngineException(e);
+        }
+    }
+
+    @Override
+    public void changeSLA(String id, String actions, String dates, String childIds, String newParams)
+            throws BaseEngineException {
+        Map<String, String> slaNewParams = null;
+
+        try {
+
+            if (newParams != null) {
+                slaNewParams = JobUtils.parseChangeValue(newParams);
+            }
+
+            new CoordSLAChangeXCommand(id, actions, dates, slaNewParams).call();
+
+        }
+        catch (CommandException e) {
+            throw new CoordinatorEngineException(e);
+        }
+    }
+
+    @Override
+    public void enableSLAAlert(String id, String actions, String dates, String childIds) throws BaseEngineException {
+        try {
+            new CoordSLAAlertsEnableXCommand(id, actions, dates).call();
+
+        }
+        catch (CommandException e) {
+            throw new CoordinatorEngineException(e);
+        }
+    }
+
+    /**
+     * return a list of killed Coordinator job
+     *
+     * @param filter, the filter string for which the coordinator jobs are killed
+     * @param start, the starting index for coordinator jobs
+     * @param length, maximum number of jobs to be killed
+     * @return the list of jobs being killed
+     * @throws CoordinatorEngineException thrown if one or more of the jobs cannot be killed
+     */
+    public CoordinatorJobInfo killJobs(String filter, int start, int length) throws CoordinatorEngineException {
+        try {
+            Map<String, List<String>> filterMap = parseJobsFilter(filter);
+            CoordinatorJobInfo coordinatorJobInfo =
+                    new BulkCoordXCommand(filterMap, start, length, OperationType.Kill).call();
+            if (coordinatorJobInfo == null) {
+                return new CoordinatorJobInfo(new ArrayList<CoordinatorJobBean>(), 0, 0, 0);
+            }
+            return coordinatorJobInfo;
+        }
+        catch (CommandException ex) {
+            throw new CoordinatorEngineException(ex);
+        }
+    }
+
+    /**
+     * return the jobs that've been suspended
+     * @param filter Filter for jobs that will be suspended, can be name, user, group, status, id or combination of any
+     * @param start Offset for the jobs that will be suspended
+     * @param length maximum number of jobs that will be suspended
+     * @return
+     * @throws CoordinatorEngineException
+     */
+    public CoordinatorJobInfo suspendJobs(String filter, int start, int length) throws CoordinatorEngineException {
+        try {
+            Map<String, List<String>> filterMap = parseJobsFilter(filter);
+            CoordinatorJobInfo coordinatorJobInfo =
+                    new BulkCoordXCommand(filterMap, start, length, OperationType.Suspend).call();
+            if (coordinatorJobInfo == null) {
+                return new CoordinatorJobInfo(new ArrayList<CoordinatorJobBean>(), 0, 0, 0);
+            }
+            return coordinatorJobInfo;
+        }
+        catch (CommandException ex) {
+            throw new CoordinatorEngineException(ex);
+        }
+    }
+
+    /**
+     * return the jobs that've been resumed
+     * @param filter Filter for jobs that will be resumed, can be name, user, group, status, id or combination of any
+     * @param start Offset for the jobs that will be resumed
+     * @param length maximum number of jobs that will be resumed
+     * @return
+     * @throws CoordinatorEngineException
+     */
+    public CoordinatorJobInfo resumeJobs(String filter, int start, int length) throws CoordinatorEngineException {
+        try {
+            Map<String, List<String>> filterMap = parseJobsFilter(filter);
+            CoordinatorJobInfo coordinatorJobInfo =
+                    new BulkCoordXCommand(filterMap, start, length, OperationType.Resume).call();
+            if (coordinatorJobInfo == null) {
+                return new CoordinatorJobInfo(new ArrayList<CoordinatorJobBean>(), 0, 0, 0);
+            }
+            return coordinatorJobInfo;
+        }
+        catch (CommandException ex) {
+            throw new CoordinatorEngineException(ex);
         }
     }
 }

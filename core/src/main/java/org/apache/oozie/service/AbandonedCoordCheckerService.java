@@ -38,8 +38,8 @@ import com.google.common.annotations.VisibleForTesting;
 
 /**
  * The Abandoned Coord Checker Service check finds out the abandoned coord jobs in system and kills it. A job is
- * considered to be abandoned/faulty if total number of actions in failed/timedout/suspended >= limit and there are no
- * succeeded action and job start time < job.older.than. Email will not be sent if
+ * considered to be abandoned/faulty if total number of actions in failed/timedout/suspended &gt;= limit and there are no
+ * succeeded action and job start time &lt; job.older.than. Email will not be sent if
  * oozie.service.AbandonedCoordCheckerService.email.address is not configured.
  */
 public class AbandonedCoordCheckerService implements Service {
@@ -164,7 +164,7 @@ public class AbandonedCoordCheckerService implements Service {
             }
             EmailActionExecutor email = new EmailActionExecutor();
             String subject = SUBJECT + " for " + serverURL + " at " + DateUtils.formatDateOozieTZ(new Date());
-            email.email(to, new String[0], subject, body, CONTENT_TYPE);
+            email.email(to, new String[0], subject, body, null, CONTENT_TYPE, null);
         }
     }
 

@@ -34,6 +34,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.cli.CliDriver;
@@ -41,7 +42,8 @@ import org.apache.hadoop.hive.conf.HiveConf;
 
 public class HiveMain extends LauncherMain {
     private static final Pattern[] HIVE_JOB_IDS_PATTERNS = {
-      Pattern.compile("Ended Job = (job_\\S*)")
+      Pattern.compile("Ended Job = (job_\\S*)"),
+      Pattern.compile("Executing on YARN cluster with App id (application[0-9_]*)")
     };
     private static final Set<String> DISALLOWED_HIVE_OPTIONS = new HashSet<String>();
 
@@ -84,6 +86,8 @@ public class HiveMain extends LauncherMain {
 
         hiveConf.addResource(new Path("file:///", actionXml));
 
+        setYarnTag(hiveConf);
+
         // Propagate delegation related props from launcher job to Hive job
         String delegationToken = getFilePathFromEnv("HADOOP_TOKEN_FILE_LOCATION");
         if (delegationToken != null) {
@@ -112,6 +116,8 @@ public class HiveMain extends LauncherMain {
 
         // to force hive to use the jobclient to submit the job, never using HADOOPBIN (to do localmode)
         hiveConf.setBoolean("hive.exec.mode.local.auto", false);
+
+        hiveConf.set("hive.querylog.location", "./hivelogs");
 
         return hiveConf;
     }
@@ -200,15 +206,6 @@ public class HiveMain extends LauncherMain {
         Configuration hiveConf = setUpHiveSite();
 
         List<String> arguments = new ArrayList<String>();
-        String scriptPath = hiveConf.get(HiveActionExecutor.HIVE_SCRIPT);
-
-        if (scriptPath == null) {
-            throw new RuntimeException("Action Configuration does not have [" +  HiveActionExecutor.HIVE_SCRIPT + "] property");
-        }
-
-        if (!new File(scriptPath).exists()) {
-            throw new RuntimeException("Hive script file [" + scriptPath + "] does not exist");
-        }
 
         String logFile = setUpHiveLog4J(hiveConf);
         arguments.add("--hiveconf");
@@ -216,24 +213,45 @@ public class HiveMain extends LauncherMain {
         arguments.add("--hiveconf");
         arguments.add("hive.log4j.exec.file=" + new File(HIVE_EXEC_L4J_PROPS).getAbsolutePath());
 
-        // print out current directory & its contents
-        File localDir = new File("dummy").getAbsoluteFile().getParentFile();
-        System.out.println("Current (local) dir = " + localDir.getAbsolutePath());
-        System.out.println("------------------------");
-        for (String file : localDir.list()) {
-            System.out.println("  " + file);
+        String scriptPath = hiveConf.get(HiveActionExecutor.HIVE_SCRIPT);
+        String query = hiveConf.get(HiveActionExecutor.HIVE_QUERY);
+        if (scriptPath != null) {
+            if (!new File(scriptPath).exists()) {
+                throw new RuntimeException("Hive script file [" + scriptPath + "] does not exist");
+            }
+            // print out current directory & its contents
+            File localDir = new File("dummy").getAbsoluteFile().getParentFile();
+            System.out.println("Current (local) dir = " + localDir.getAbsolutePath());
+            System.out.println("------------------------");
+            for (String file : localDir.list()) {
+                System.out.println("  " + file);
+            }
+            System.out.println("------------------------");
+            System.out.println();
+            // Prepare the Hive Script
+            String script = readStringFromFile(scriptPath);
+            System.out.println();
+            System.out.println("Script [" + scriptPath + "] content: ");
+            System.out.println("------------------------");
+            System.out.println(script);
+            System.out.println("------------------------");
+            System.out.println();
+            arguments.add("-f");
+            arguments.add(scriptPath);
+        } else if (query != null) {
+            System.out.println("Query: ");
+            System.out.println("------------------------");
+            System.out.println(query);
+            System.out.println("------------------------");
+            System.out.println();
+            String filename = createScriptFile(query);
+            arguments.add("-f");
+            arguments.add(filename);
+        } else {
+            throw new RuntimeException("Action Configuration does not have ["
+                +  HiveActionExecutor.HIVE_SCRIPT + "], or ["
+                +  HiveActionExecutor.HIVE_QUERY + "] property");
         }
-        System.out.println("------------------------");
-        System.out.println();
-
-        // Prepare the Hive Script
-        String script = readStringFromFile(scriptPath);
-        System.out.println();
-        System.out.println("Script [" + scriptPath + "] content: ");
-        System.out.println("------------------------");
-        System.out.println(script);
-        System.out.println("------------------------");
-        System.out.println();
 
         // Pass any parameters to Hive via arguments
         String[] params = MapReduceMain.getStrings(hiveConf, HiveActionExecutor.HIVE_PARAMS);
@@ -255,9 +273,6 @@ public class HiveMain extends LauncherMain {
             System.out.println("------------------------");
             System.out.println();
         }
-
-        arguments.add("-f");
-        arguments.add(scriptPath);
 
         String[] hiveArgs = MapReduceMain.getStrings(hiveConf, HiveActionExecutor.HIVE_ARGS);
         for (String hiveArg : hiveArgs) {
@@ -293,31 +308,15 @@ public class HiveMain extends LauncherMain {
         }
         finally {
             System.out.println("\n<<< Invocation of Hive command completed <<<\n");
-            writeExternalChildIDs(logFile);
-
+            writeExternalChildIDs(logFile, HIVE_JOB_IDS_PATTERNS, "Hive");
         }
     }
 
-    private void writeExternalChildIDs(String logFile) {
-        // harvesting and recording Hadoop Job IDs
-        try {
-            Properties jobIds = getHadoopJobIds(logFile, HIVE_JOB_IDS_PATTERNS);
-            File file = new File(System.getProperty(LauncherMapper.ACTION_PREFIX
-                    + LauncherMapper.ACTION_DATA_OUTPUT_PROPS));
-            OutputStream os = new FileOutputStream(file);
-            try {
-                jobIds.store(os, "");
-            }
-            finally {
-                os.close();
-            }
-            System.out.println(" Hadoop Job IDs executed by Hive: " + jobIds.getProperty(HADOOP_JOBS));
-            System.out.println();
-        }
-        catch (Exception e) {
-            System.out.println("WARN: Error getting Hadoop Job IDs executed by Hive");
-            e.printStackTrace(System.out);
-        }
+    private String createScriptFile(String query) throws IOException {
+        String filename = "oozie-hive-query-" + System.currentTimeMillis() + ".hql";
+        File f = new File(filename);
+        FileUtils.writeStringToFile(f, query, "UTF-8");
+        return filename;
     }
 
     private void runHive(String[] args) throws Exception {

@@ -15,6 +15,10 @@ Map/Reduce and Pig jobs.
 
 ---++ Changelog
 
+---+++!! 2015APR29
+
+   * #3.2.1.4 Added notes about Java action retries
+   * #3.2.7 Added notes about Java action retries
 ---+++!! 2014MAY08
 
    * #3.2.2.4 Added support for fully qualified job-xml path
@@ -372,7 +376,7 @@ boolean value, =true= or =false=. For example:
 
 The =name= attribute in the =decision= node is the name of the decision node.
 
-Each =case= elements contains a predicate an a transition name. The predicate ELs are evaluated
+Each =case= elements contains a predicate and a transition name. The predicate ELs are evaluated
 in order until one returns =true= and the corresponding transition is taken.
 
 The =default= element indicates the transition to take if none of the predicates evaluates
@@ -390,9 +394,8 @@ state if none of the predicates evaluates to true.
         <switch>
             <case to="reconsolidatejob">
               ${fs:fileSize(secondjobOutputDir) gt 10 * GB}
-            </case>
-            <case to="rexpandjob">
-              ${fs:filSize(secondjobOutputDir) lt 100 * MB}
+            </case> <case to="rexpandjob">
+              ${fs:fileSize(secondjobOutputDir) lt 100 * MB}
             </case>
             <case to="recomputejob">
               ${ hadoop:counters('secondjob')[RECORDS][REDUCE_OUT] lt 1000000 }
@@ -525,10 +528,15 @@ Each action type must clearly define all the error codes it can produce.
 Oozie provides recovery capabilities when starting or ending actions.
 
 Once an action starts successfully Oozie will not retry starting the action if the action fails during its execution.
-The assumption is that the external system (i.e. Hadoop) executing the action has enough resilience to recovery jobs
+The assumption is that the external system (i.e. Hadoop) executing the action has enough resilience to recover jobs
 once it has started (i.e. Hadoop task retries).
 
-Depending on the nature of the failure, Oozie will have different recovery strategies.
+Java actions are a special case with regard to retries.  Although Oozie itself does not retry Java actions
+should they fail after they have successfully started, Hadoop itself can cause the action to be restarted due to a
+map task retry on the map task running the Java application.  See the Java Action section below for more detail.
+
+For failures that occur prior to the start of the job, Oozie will have different recovery strategies depending on the
+nature of the failure.
 
 If the failure is of transient nature, Oozie will perform retries after a pre-defined time interval. The number of
 retries and timer interval for a type of action must be pre-configured at Oozie level. Workflow jobs can override such
@@ -603,7 +611,7 @@ MapReduce action, if you're more familiar with MapReduce's Java API, if there's 
 configuration that's difficult to do in straight XML (e.g. Avro).
 
 Create a class that implements the org.apache.oozie.action.hadoop.OozieActionConfigurator interface from the "oozie-sharelib-oozie"
-artifact.  It contains a single method that recieves a =JobConf= as an argument.  Any configuration properties set on this =JobConf=
+artifact.  It contains a single method that receives a =JobConf= as an argument.  Any configuration properties set on this =JobConf=
 will be used by the MapReduce action.
 
 The OozieActionConfigurator has this signature:
@@ -789,7 +797,7 @@ Properties specified in the =config-class= class override properties specified i
 
 External Stats can be turned on/off by specifying the property _oozie.action.external.stats.write_ as _true_ or _false_ in the configuration element of workflow.xml. The default value for this property is _false_.
 
-The =file= element, if present, must specify the target sybolic link for binaries by separating the original file and target with a # (file#target-sym-link). This is not required for libraries.
+The =file= element, if present, must specify the target symbolic link for binaries by separating the original file and target with a # (file#target-sym-link). This is not required for libraries.
 
 The =mapper= and =reducer= process for streaming jobs, should specify the executable command with URL encoding. e.g. '%' should be replaced by '%25'.
 
@@ -1150,7 +1158,7 @@ executed. Thus there is less chance of an error occurring while the =fs= action 
     ...
     <action name="[NODE-NAME]">
         <fs>
-            <delete path='[PATH]'/>
+            <delete path='[PATH]' skip-trash='[true/false]'/>
             ...
             <mkdir path='[PATH]'/>
             ...
@@ -1170,7 +1178,9 @@ executed. Thus there is less chance of an error occurring while the =fs= action 
 </verbatim>
 
 The =delete= command deletes the specified path, if it is a directory it deletes recursively all its content and then
-deletes the directory.
+deletes the directory. By default it does skip trash. It can be moved to trash by setting the value of skip-trash to
+'false'. It can also be used to drop hcat partitions. This is the only FS command which supports HCatalog URIs as well.
+For eg: <verbatim><delete path='hcat://[metastore server]:[port]/[database name]/[table name]/[partkey1]=[value];[partkey2]=[value];...'/></verbatim>
 
 The =mkdir= command creates the specified directory, it creates all missing directories in the path. If the directory
 already exist it does a no-op.
@@ -1441,7 +1451,7 @@ A =java= action can create a Hadoop configuration for interacting with a cluster
 Oozie prepares a Hadoop configuration file which includes the environments site configuration files (e.g. hdfs-site.xml, 
 mapred-site.xml, etc) plus the properties added to the =<configuration>= section of the =java= action. The Hadoop configuration 
 file is made available as a local file to the Java application in its running directory. It can be added to the =java= actions 
-Hadoop configuration by referencing the system property: =oozie-action.conf.xml=. For example:
+Hadoop configuration by referencing the system property: =oozie.action.conf.xml=. For example:
 
 <verbatim>
 // loading action conf prepared by Oozie
@@ -1462,7 +1472,7 @@ application. Refer to section [#FilesAchives][Adding Files and Archives for the 
 
 The =capture-output= element can be used to propagate values back into Oozie context, which can then be accessed via
 EL-functions. This needs to be written out as a java properties format file. The filename is obtained via a System 
-property specified by the constant =JavaMainMapper.OOZIE_JAVA_MAIN_CAPTURE_OUTPUT_FILE=
+property specified by the constant =oozie.action.output.properties=
 
 *IMPORTANT:* In order for a Java action to succeed on a secure cluster, it must propagate the Hadoop delegation token like in the
 following code snippet (this is benign on non-secure clusters):
@@ -1475,6 +1485,13 @@ if (System.getenv("HADOOP_TOKEN_FILE_LOCATION") != null) {
 
 *IMPORTANT:* Because the Java application is run from within a Map-Reduce job, from Hadoop 0.20. onwards a queue must
 be assigned to it. The queue name must be specified as a configuration property.
+
+*IMPORTANT:* The Java application from a Java action is executed in a single map task.  If the task is abnormally terminated,
+such as due to a TaskTracker restart (e.g. during cluster maintenance), the task will be retried via the normal Hadoop task
+retry mechanism.  To avoid workflow failure, the application should be written in a fashion that is resilient to such retries,
+for example by detecting and deleting incomplete outputs or picking back up from complete outputs.  Furthermore, if a Java action
+spawns asynchronous activity outside the JVM of the action itself (such as by launching additional MapReduce jobs), the
+application must consider the possibility of collisions with activity spawned by the new instance.
 
 *Syntax:*
 
@@ -1775,8 +1792,8 @@ It returns the URL UTF-8 encoded value of the given string. A string with =null=
 
 *String timestamp()*
 
-It returns the UTC current date and time in W3C format down to the second (YYYY-MM-DDThh:mm:ss.sZ). I.e.:
-1997-07-16T19:20:30.45Z
+It returns the current datetime in ISO8601 format, down to minutes (yyyy-MM-ddTHH:mmZ), in the Oozie's processing timezone,
+i.e. 1997-07-16T19:20Z
 
 *String toJsonStr(Map<String, String>)* (since Oozie 3.3)
 
@@ -1835,8 +1852,8 @@ executed or it has not completed yet.
 
 *String wf:lastErrorNode()*
 
-It returns the name of the last workflow action node that exit with an =ERROR= exit state, or an empty string if no a
-ction has exited with =ERROR= state in the current workflow job.
+It returns the name of the last workflow action node that exit with an =ERROR= exit state, or an empty string if no
+action has exited with =ERROR= state in the current workflow job.
 
 *String wf:errorCode(String node)*
 
@@ -1870,7 +1887,7 @@ completed yet.
 
 *int wf:actionTrackerUri(String node)*
 
-It returns the tracker URIfor an action node, or an empty string if the action has not being executed or it has not
+It returns the tracker URI for an action node, or an empty string if the action has not being executed or it has not
 completed yet.
 
 *int wf:actionExternalStatus(String node)*
@@ -2201,22 +2218,22 @@ For all the functions in this section the path must include the FS URI. For exam
 
 *boolean fs:exists(String path)*
 
-It returns =true= or =false= depending if the specified path URI exists or not.
+It returns =true= or =false= depending if the specified path URI exists or not. If a glob pattern is used for the URI, it returns true when there is at least one matching path.
 
 *boolean fs:isDir(String path)*
 
 It returns =true= if the specified path URI exists and it is a directory, otherwise it returns =false=.
 
-*boolean fs:dirSize(String path)*
+*long fs:dirSize(String path)*
 
 It returns the size in bytes of all the files in the specified path. If the path is not a directory, or if it does not
 exist it returns -1. It does not work recursively, only computes the size of the files under the specified path.
 
-*boolean fs:fileSize(String path)*
+*long fs:fileSize(String path)*
 
 It returns the size in bytes of specified file. If the path is not a file, or if it does not exist it returns -1.
 
-*boolean fs:blockSize(String path)*
+*long fs:blockSize(String path)*
 
 It returns the block size in bytes of specified file. If the path is not a file, or if it does not exist it returns -1.
 
@@ -2384,7 +2401,7 @@ request to Oozie the workflow job ends reaching the =KILLED= final state.
 #JobReRun
 ---++ 10 Workflow Jobs Recovery (re-run)
 
-Oozie must provide a mechanism by which a a failed workflow job can be resubmitted and executed starting after any
+Oozie must provide a mechanism by which a failed workflow job can be resubmitted and executed starting after any
 action node that has completed its execution in the prior run. This is specially useful when the already executed
 action of a workflow job are too expensive to be re-executed.
 
@@ -2402,7 +2419,7 @@ The recovery workflow job will run under the same workflow job ID as the origina
 To submit a recovery workflow job the target workflow job to recover must be in an end state (=SUCCEEDED=, =FAILED=
 or =KILLED=).
 
-A recovery run could be done using a new worklfow application path under certain constraints (see next paragraph).
+A recovery run could be done using a new workflow application path under certain constraints (see next paragraph).
 This is to allow users to do a one off patch for the workflow application without affecting other running jobs for the
 same application.
 
@@ -2482,11 +2499,13 @@ classpath/libpath for all its actions.
 A workflow job can specify a share library path using the job property =oozie.libpath=.
 
 A workflow job can use the system share library by setting the job property =oozie.use.system.libpath= to =true=.
+=oozie.use.system.libpath= can be also configured at action configuration.
+=oozie.use.system.libpath= defined at action level overrides job property.
 
 ---+++ 17.1 Action Share Library Override (since Oozie 3.3)
 
 Oozie share libraries are organized per action type, for example Pig action share library directory is =share/lib/pig/=
-and Mapreduce Streaming share library direcotry is =share/library/mapreduce-streaming/=.
+and Mapreduce Streaming share library directory is =share/library/mapreduce-streaming/=.
 
 Oozie bundles a share library for specific versions of streaming, pig, hive, sqoop, distcp actions. These versions
 of streaming, pig, hive, sqoop and distcp have been tested and verified to work correctly with the version of Oozie
@@ -2496,8 +2515,8 @@ actions (since Oozie 4.x).
 In addition, Oozie provides a mechanism to override the action share library JARs to allow using an alternate version
 of of the action JARs.
 
-This mechanism enables Oozie administrators to patch share library JARs, to include alternate versios of the share
-libraries, to provide acess to more than one version at the same time.
+This mechanism enables Oozie administrators to patch share library JARs, to include alternate versions of the share
+libraries, to provide access to more than one version at the same time.
 
 The share library override is supported at server level and at job level. The share library directory names are resolved
 using the following precedence order:
@@ -2528,7 +2547,7 @@ Oozie adminstrator can allow more error codes to be handled for User-Retry. By a
 =oozie.service.LiteWorkflowStoreService.user.retry.error.code.ext= to =oozie.site.xml=
 and error codes as value, these error codes will be considered as User-Retry after system restart.
 
-Examples of User-Retry in a workflow aciton is :
+Examples of User-Retry in a workflow action is :
 
 <verbatim>
 <workflow-app xmlns="uri:oozie:workflow:0.3" name="wf-name">
@@ -2851,6 +2870,7 @@ to be executed.
 
     <xs:complexType name="DELETE">
         <xs:attribute name="path" type="xs:string" use="required"/>
+        <xs:attribute name="skip-trash" type="xs:boolean" use="optional"/>
     </xs:complexType>
 
     <xs:complexType name="MKDIR">

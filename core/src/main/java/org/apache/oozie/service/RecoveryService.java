@@ -20,9 +20,12 @@ package org.apache.oozie.service;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.oozie.BundleActionBean;
@@ -50,8 +53,8 @@ import org.apache.oozie.command.wf.SignalXCommand;
 import org.apache.oozie.command.wf.SuspendXCommand;
 import org.apache.oozie.executor.jpa.BundleActionQueryExecutor;
 import org.apache.oozie.executor.jpa.BundleJobQueryExecutor;
-import org.apache.oozie.executor.jpa.CoordActionsGetForRecoveryJPAExecutor;
-import org.apache.oozie.executor.jpa.CoordActionsGetReadyGroupbyJobIDJPAExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor;
+import org.apache.oozie.executor.jpa.CoordActionQueryExecutor.CoordActionQuery;
 import org.apache.oozie.executor.jpa.CoordJobQueryExecutor;
 import org.apache.oozie.executor.jpa.BundleActionQueryExecutor.BundleActionQuery;
 import org.apache.oozie.executor.jpa.BundleJobQueryExecutor.BundleJobQuery;
@@ -96,6 +99,9 @@ public class RecoveryService implements Service {
      * Age of actions to queue, in seconds.
      */
     public static final String CONF_WF_ACTIONS_OLDER_THAN = CONF_PREFIX_WF_ACTIONS + "older.than";
+
+    public static final String CONF_WF_ACTIONS_CREATED_TIME_INTERVAL = CONF_PREFIX_WF_ACTIONS + "created.time.interval";
+
     /**
      * Age of coordinator jobs to recover, in seconds.
      */
@@ -110,6 +116,9 @@ public class RecoveryService implements Service {
     private static final String INSTR_RECOVERED_ACTIONS_COUNTER = "actions";
     private static final String INSTR_RECOVERED_COORD_ACTIONS_COUNTER = "coord_actions";
     private static final String INSTR_RECOVERED_BUNDLE_ACTIONS_COUNTER = "bundle_actions";
+
+    public static final long ONE_DAY_MILLISCONDS = 25 * 60 * 60 * 1000;
+
 
 
     /**
@@ -139,7 +148,6 @@ public class RecoveryService implements Service {
             jpaService = Services.get().get(JPAService.class);
             runWFRecovery();
             runCoordActionRecovery();
-            runCoordActionRecoveryForReady();
             runBundleRecovery();
             log.debug("QUEUING [{0}] for potential recovery", msg.toString());
             boolean ret = false;
@@ -236,13 +244,20 @@ public class RecoveryService implements Service {
          * Recover coordinator actions that are staying in WAITING or SUBMITTED too long
          */
         private void runCoordActionRecovery() {
+            Set<String> readyJobs = new HashSet<String>();
             XLog.Info.get().clear();
             XLog log = XLog.getLog(getClass());
             long pushMissingDepInterval = ConfigurationService.getLong(CONF_PUSH_DEPENDENCY_INTERVAL);
             long pushMissingDepDelay = pushMissingDepInterval;
-            List<CoordinatorActionBean> cactions = null;
+            Timestamp ts = new Timestamp(System.currentTimeMillis() - this.coordOlderThan * 1000);
+
+            List<CoordinatorActionBean> cactions = new ArrayList<CoordinatorActionBean>();
             try {
-                cactions = jpaService.execute(new CoordActionsGetForRecoveryJPAExecutor(coordOlderThan));
+                cactions.addAll(CoordActionQueryExecutor.getInstance().getList(
+                        CoordActionQuery.GET_COORD_ACTIONS_FOR_RECOVERY_OLDER_THAN, ts));
+                cactions.addAll(CoordActionQueryExecutor.getInstance().getList(
+                        CoordActionQuery.GET_COORD_ACTIONS_WAITING_READY_SUBMITTED_OLDER_THAN, ts));
+
             }
             catch (JPAExecutorException ex) {
                 log.warn("Error reading coord actions from database", ex);
@@ -295,30 +310,30 @@ public class RecoveryService implements Service {
                                 log.debug("Recover a RUNNING coord action and resubmit ResumeXCommand :" + caction.getId());
                             }
                         }
+                        else if (caction.getStatus() == CoordinatorActionBean.Status.READY) {
+                            readyJobs.add(caction.getJobId());
+                        }
                     }
                 }
                 catch (Exception ex) {
                     log.error("Exception, {0}", ex.getMessage(), ex);
                 }
             }
-
-
+            runCoordActionRecoveryForReady(readyJobs);
         }
 
         /**
          * Recover coordinator actions that are staying in READY too long
          */
-        private void runCoordActionRecoveryForReady() {
+        private void runCoordActionRecoveryForReady(Set<String> jobIds) {
             XLog.Info.get().clear();
             XLog log = XLog.getLog(getClass());
-
+            List<String> coordJobIds = new ArrayList<String>(jobIds);
             try {
-                List<String> jobids = jpaService.execute(new CoordActionsGetReadyGroupbyJobIDJPAExecutor(coordOlderThan));
-                jobids = Services.get().get(JobsConcurrencyService.class).getJobIdsForThisServer(jobids);
-                msg.append(", COORD_READY_JOBS : " + jobids.size());
-                for (String jobid : jobids) {
-                        queueCallable(new CoordActionReadyXCommand(jobid));
-
+                coordJobIds = Services.get().get(JobsConcurrencyService.class).getJobIdsForThisServer(coordJobIds);
+                msg.append(", COORD_READY_JOBS : " + coordJobIds.size());
+                for (String jobid : coordJobIds) {
+                    queueCallable(new CoordActionReadyXCommand(jobid));
                     log.info("Recover READY coord actions for jobid :" + jobid);
                 }
             }
@@ -334,10 +349,14 @@ public class RecoveryService implements Service {
             XLog.Info.get().clear();
             XLog log = XLog.getLog(getClass());
             // queue command for action recovery
+
+            long createdTimeInterval = new Date().getTime() - ConfigurationService.getLong(CONF_WF_ACTIONS_CREATED_TIME_INTERVAL)
+                    * ONE_DAY_MILLISCONDS;
+
             List<WorkflowActionBean> actions = null;
             try {
                 actions = WorkflowActionQueryExecutor.getInstance().getList(WorkflowActionQuery.GET_PENDING_ACTIONS,
-                        olderThan);
+                        olderThan, createdTimeInterval);
             }
             catch (JPAExecutorException ex) {
                 log.warn("Exception while reading pending actions from storage", ex);

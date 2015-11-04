@@ -70,7 +70,7 @@ public abstract class LiteWorkflowStoreService extends WorkflowStoreService {
     public static final String USER_ERROR_CODE_ALL = "ALL";
 
     /**
-     * Delegation method used by the Action and Decision {@link NodeHandler} on start. <p/> This method provides the
+     * Delegation method used by the Action and Decision {@link NodeHandler} on start. <p> This method provides the
      * necessary information to create ActionExecutors.
      *
      * @param context NodeHandler context.
@@ -93,7 +93,6 @@ public abstract class LiteWorkflowStoreService extends WorkflowStoreService {
 
         if (!skipAction) {
             String nodeConf = context.getNodeDef().getConf();
-            String executionPath = context.getExecutionPath();
 
             if (actionType == null) {
                 try {
@@ -107,12 +106,14 @@ public abstract class LiteWorkflowStoreService extends WorkflowStoreService {
             }
             log.debug(" Creating action for node [{0}]", nodeName);
             action.setType(actionType);
-            action.setExecutionPath(executionPath);
             action.setConf(nodeConf);
             action.setLogToken(((WorkflowJobBean) context.getTransientVar(WORKFLOW_BEAN)).getLogToken());
             action.setStatus(WorkflowAction.Status.PREP);
             action.setJobId(jobId);
         }
+
+        String executionPath = context.getExecutionPath();
+        action.setExecutionPath(executionPath);
         action.setCred(context.getNodeDef().getCred());
         log.debug("Setting action for cred: '"+context.getNodeDef().getCred() +
         		"', name: '"+ context.getNodeDef().getName() + "'");
@@ -208,7 +209,7 @@ public abstract class LiteWorkflowStoreService extends WorkflowStoreService {
     }
 
     /**
-     * Delegation method used when failing actions. <p/>
+     * Delegation method used when failing actions. <p>
      *
      * @param context NodeHandler context.
      */
@@ -218,7 +219,7 @@ public abstract class LiteWorkflowStoreService extends WorkflowStoreService {
     }
 
     /**
-     * Delegation method used when killing actions. <p/>
+     * Delegation method used when killing actions. <p>
      *
      * @param context NodeHandler context.
      */
@@ -228,7 +229,7 @@ public abstract class LiteWorkflowStoreService extends WorkflowStoreService {
     }
 
     /**
-     * Used to terminate jobs - FAIL or KILL. <p/>
+     * Used to terminate jobs - FAIL or KILL. <p>
      *
      * @param context NodeHandler context.
      * @param transientVar The transient variable name.
