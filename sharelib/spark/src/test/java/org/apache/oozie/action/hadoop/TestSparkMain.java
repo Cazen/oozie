@@ -53,12 +53,17 @@ public class TestSparkMain extends MainTestCase {
 
         jobConf.set("mapreduce.job.tags", "" + System.currentTimeMillis());
         setSystemProperty("oozie.job.launch.time", "" + System.currentTimeMillis());
+        File statsDataFile = new File(getTestCaseDir(), "statsdata.properties");
+        File hadoopIdsFile = new File(getTestCaseDir(), "hadoopIds");
+        File outputDataFile = new File(getTestCaseDir(), "outputdata.properties");
 
         jobConf.set(SparkActionExecutor.SPARK_MASTER, "local[*]");
         jobConf.set(SparkActionExecutor.SPARK_MODE, "client");
         jobConf.set(SparkActionExecutor.SPARK_CLASS, "org.apache.oozie.example.SparkFileCopy");
         jobConf.set(SparkActionExecutor.SPARK_JOB_NAME, "Spark Copy File");
-        jobConf.set(SparkActionExecutor.SPARK_OPTS, "--driver-memory 1024M");
+        jobConf.set(SparkActionExecutor.SPARK_OPTS, "--driver-memory  1042M " +
+                "--conf spark.executor.extraJavaOptions=\"-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp\"");
+
         jobConf.set(SparkActionExecutor.SPARK_JAR, getFsTestCaseDir() + "/lib/test.jar");
 
 
@@ -68,6 +73,10 @@ public class TestSparkMain extends MainTestCase {
         os.close();
 
         System.setProperty("oozie.action.conf.xml", actionXml.getAbsolutePath());
+        setSystemProperty("oozie.launcher.job.id", "" + System.currentTimeMillis());
+        setSystemProperty("oozie.action.stats.properties", statsDataFile.getAbsolutePath());
+        setSystemProperty("oozie.action.externalChildIDs", hadoopIdsFile.getAbsolutePath());
+        setSystemProperty("oozie.action.output.properties", outputDataFile.getAbsolutePath());
 
         File jarFile = IOUtils.createJar(new File(getTestCaseDir()), "test.jar", LauncherMainTester.class);
         InputStream is = new FileInputStream(jarFile);

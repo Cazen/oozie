@@ -353,7 +353,7 @@ public class ActionStartXCommand extends ActionXCommand<org.apache.oozie.command
     }
 
     protected void callActionEnd() throws CommandException {
-        new ActionEndXCommand(wfAction.getId(), wfAction.getType()).call(getEntityKey());
+        new ActionEndXCommand(wfAction.getId(), wfAction.getType()).call();
     }
 
     protected void updateJobLastModified(){
@@ -398,6 +398,11 @@ public class ActionStartXCommand extends ActionXCommand<org.apache.oozie.command
             // need to delete child job id of original run
             wfAction.setExternalChildIDs("");
         }
+    }
+
+    @Override
+    protected void queueCommandForTransientFailure(long retryDelayMillis){
+        queue(new ActionStartXCommand(wfAction.getId(), wfAction.getType()), retryDelayMillis);
     }
 
 }

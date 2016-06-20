@@ -120,7 +120,9 @@ public class SqoopMain extends LauncherMain {
         }
 
         String logLevel = sqoopConf.get("oozie.sqoop.log.level", "INFO");
+        String rootLogLevel = sqoopConf.get("oozie.action." + LauncherMapper.ROOT_LOGGER_LEVEL, "INFO");
 
+        hadoopProps.setProperty("log4j.rootLogger", rootLogLevel + ", A");
         hadoopProps.setProperty("log4j.logger.org.apache.sqoop", logLevel + ", A");
         hadoopProps.setProperty("log4j.appender.A", "org.apache.log4j.ConsoleAppender");
         hadoopProps.setProperty("log4j.appender.A.layout", "org.apache.log4j.PatternLayout");
@@ -130,8 +132,8 @@ public class SqoopMain extends LauncherMain {
         hadoopProps.setProperty("log4j.appender.jobid.file", logFile);
         hadoopProps.setProperty("log4j.appender.jobid.layout", "org.apache.log4j.PatternLayout");
         hadoopProps.setProperty("log4j.appender.jobid.layout.ConversionPattern", "%-4r [%t] %-5p %c %x - %m%n");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapred", "INFO, jobid");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapreduce.Job", "INFO, jobid");
+        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapred", "INFO, jobid, A");
+        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapreduce.Job", "INFO, jobid, A");
 
         String localProps = new File(SQOOP_LOG4J_PROPS).getAbsolutePath();
         OutputStream os1 = new FileOutputStream(localProps);

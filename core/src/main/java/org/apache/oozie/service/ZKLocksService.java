@@ -173,7 +173,8 @@ public class ZKLocksService extends MemoryLocksService implements Service, Instr
             }
         }
         catch (Exception ex) {
-            throw new RuntimeException(ex);
+            //Not throwing exception. Should return null, so that command can be requeued
+            LOG.error("Error while acquiring lock", ex);
         }
         return token;
     }
@@ -197,13 +198,16 @@ public class ZKLocksService extends MemoryLocksService implements Service, Instr
         public void release() {
             try {
                 lock.release();
-                int val = lock.getParticipantNodes().size();
-                //TODO this might break, when count is zero and before we remove lock, same thread may ask for same lock.
-                // Hashmap will return the lock, but eventually release will remove it from hashmap and a immediate getlock will
-                //create a new instance. Will fix this as part of OOZIE-1922
-                if (val == 0) {
+                if (zkLocks.get(resource) == null) {
+                    return;
+                }
+                if (!isLockHeld()) {
                     synchronized (zkLocks) {
-                        zkLocks.remove(resource);
+                        if (zkLocks.get(resource) != null) {
+                            if (!isLockHeld()) {
+                                zkLocks.remove(resource);
+                            }
+                        }
                     }
                 }
             }
@@ -212,6 +216,12 @@ public class ZKLocksService extends MemoryLocksService implements Service, Instr
             }
 
         }
+
+        private boolean isLockHeld() {
+            return zkLocks.get(resource).readLock().isAcquiredInThisProcess()
+                    || zkLocks.get(resource).writeLock().isAcquiredInThisProcess();
+        }
+
     }
 
     @VisibleForTesting

@@ -15,6 +15,9 @@ Map/Reduce and Pig jobs.
 
 ---++ Changelog
 
+---+++!! 2016FEB19
+
+   * #3.2.7 Updated notes on System.exit(int n) behavior
 ---+++!! 2015APR29
 
    * #3.2.1.4 Added notes about Java action retries
@@ -587,7 +590,7 @@ Streaming and inline property values can be parameterized (templatized) using EL
 The Hadoop =mapred.job.tracker= and =fs.default.name= properties must not be present in the job-xml and inline
 configuration.
 
-#FilesAchives
+#FilesArchives
 ---+++++ 3.2.2.1 Adding Files and Archives for the Job
 
 The =file=, =archive= elements make available, to map-reduce jobs, files and archives. If the specified path is
@@ -948,7 +951,7 @@ The Hadoop =mapred.job.tracker= and =fs.default.name= properties must not be pre
 configuration.
 
 As with Hadoop map-reduce jobs, it  is possible to add files and archives to be available to the Pig job, refer to
-section [#FilesAchives][Adding Files and Archives for the Job].
+section [#FilesArchives][Adding Files and Archives for the Job].
 
 *Syntax for Pig actions in Oozie schema 0.2:*
 <verbatim>
@@ -1439,8 +1442,8 @@ To indicate an =ok= action transition, the main Java class must complete gracefu
 
 To indicate an =error= action transition, the main Java class must throw an exception.
 
-The main Java class must not call =System.exit(int n)= as this will make the =java= action to do an =error= transition
-regardless of the used exit code.
+The main Java class can call =System.exit(int n)=. Exit code zero is regarded as OK, while non-zero exit codes will 
+cause the =java= action to do an =error= transition and exit.
 
 A =java= action can be configured to perform HDFS files/directories cleanup or HCatalog partitions cleanup before
 starting the Java application. This capability enables Oozie to retry a Java application in the situation of a transient
@@ -1468,7 +1471,7 @@ The Hadoop =mapred.job.tracker= (=job-tracker=) and =fs.default.name= (=name-nod
 the =job-xml= and in the inline configuration.
 
 As with =map-reduce= and =pig= actions, it  is possible to add files and archives to be available to the Java
-application. Refer to section [#FilesAchives][Adding Files and Archives for the Job].
+application. Refer to section [#FilesArchives][Adding Files and Archives for the Job].
 
 The =capture-output= element can be used to propagate values back into Oozie context, which can then be accessed via
 EL-functions. This needs to be written out as a java properties format file. The filename is obtained via a System 

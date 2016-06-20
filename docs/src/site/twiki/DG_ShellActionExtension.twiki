@@ -35,7 +35,7 @@ must not be present in the inline configuration.
 
 As with Hadoop =map-reduce= jobs, it is possible to add files and
 archives in order to make them available to the Shell job. Refer to the
-[WorkflowFunctionalSpec#FilesAchives][Adding Files and Archives for the Job]
+[WorkflowFunctionalSpec#FilesArchives][Adding Files and Archives for the Job]
 section for more information about this feature.
 
 The output (STDOUT) of the Shell job can be made available to the workflow job after the Shell job ends. This information
@@ -217,6 +217,20 @@ EXEC=Hello.jar
 jobTracker=localhost:8021
 nameNode=hdfs://localhost:8020
 queueName=default
+</verbatim>
+
+---+++ Shell Action Configuration
+
+=oozie.action.shell.setup.hadoop.conf.dir= - Generates a config directory with various core/hdfs/yarn/mapred-site.xml files and points =HADOOP_CONF_DIR= and =YARN_CONF_DIR= env-vars to it, before the Script is invoked. XML is sourced from the action configuration. Useful when the Shell script passed uses various =hadoop= commands. Default is false.
+=oozie.action.shell.setup.hadoop.conf.dir.write.log4j.properties= - When =oozie.action.shell.setup.hadoop.conf.dir= is enabled, toggle if a log4j.properties file should also be written under the configuration files directory. Default is true.
+=oozie.action.shell.setup.hadoop.conf.dir.log4j.content= - When =oozie.action.shell.setup.hadoop.conf.dir.write.log4j.properties= is enabled, the content to write into the log4j.properties file under the configuration files directory. Default is a simple console based stderr logger, as presented below:
+<verbatim>
+log4j.rootLogger=${hadoop.root.logger}
+hadoop.root.logger=INFO,console
+log4j.appender.console=org.apache.log4j.ConsoleAppender
+log4j.appender.console.target=System.err
+log4j.appender.console.layout=org.apache.log4j.PatternLayout
+log4j.appender.console.layout.ConversionPattern=%d{yy/MM/dd HH:mm:ss} %p %c{2}: %m%n
 </verbatim>
 
 ---+++ Shell Action Logging

@@ -24,6 +24,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.action.hadoop.ActionExecutorTestCase;
+import org.apache.oozie.action.hadoop.LauncherMainTester;
 import org.apache.oozie.client.OozieClient;
 import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.client.WorkflowJob;
@@ -33,6 +34,8 @@ import org.apache.oozie.service.Services;
 import org.apache.oozie.service.WorkflowAppService;
 import org.apache.oozie.service.XLogService;
 import org.apache.oozie.util.XConfiguration;
+import org.apache.oozie.util.XmlUtils;
+import org.jdom.Element;
 
 import java.io.*;
 import java.net.URI;
@@ -227,7 +230,7 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
         assertEquals(WorkflowAction.Status.OK, action.getStatus());
 
         WorkflowJob wf = oozieClient.getJobInfo(action.getExternalId());
-        Configuration childConf = new XConfiguration(new StringReader(wf.getConf()));
+        Configuration childConf = getWorkflowConfig(wf);
         assertEquals("xyz", childConf.get("abc"));
     }
 
@@ -278,7 +281,7 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
         assertEquals(WorkflowAction.Status.OK, action.getStatus());
 
         WorkflowJob wf = oozieClient.getJobInfo(action.getExternalId());
-        Configuration childConf = new XConfiguration(new StringReader(wf.getConf()));
+        Configuration childConf = getWorkflowConfig(wf);
 
         assertFalse(getTestGroup() == childConf.get(OozieClient.GROUP_NAME));
 
@@ -358,7 +361,7 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
         assertEquals(WorkflowAction.Status.OK, action.getStatus());
 
         WorkflowJob wf = oozieClient.getJobInfo(action.getExternalId());
-        Configuration childConf = new XConfiguration(new StringReader(wf.getConf()));
+        Configuration childConf = getWorkflowConfig(wf);
         assertNull(childConf.get("abc"));
     }
 
@@ -406,7 +409,7 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
 
         WorkflowAppService wps = Services.get().get(WorkflowAppService.class);
         WorkflowJob wf = oozieClient.getJobInfo(action.getExternalId());
-        Configuration childConf = new XConfiguration(new StringReader(wf.getConf()));
+        Configuration childConf = getWorkflowConfig(wf);
         childConf = wps.createProtoActionConf(childConf, true);
         assertEquals(childConf.get(WorkflowAppService.APP_LIB_PATH_LIST), subwfLibJar.toString());
     }
@@ -416,7 +419,7 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
         FileSystem fs = getFileSystem();
         Writer writer = new OutputStreamWriter(fs.create(new Path(subWorkflowAppPath, "workflow.xml")));
         // Infinitly recursive workflow
-        
+
         String appStr = "<workflow-app xmlns=\"uri:oozie:workflow:0.4\" name=\"workflow\">" +
                 "<start to=\"subwf\"/>" +
                 "<action name=\"subwf\">" +
@@ -544,7 +547,7 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
     }
 
     public String getLazyWorkflow() {
-        return  "<workflow-app xmlns='uri:oozie:workflow:0.3' name='app'>" +
+        return  "<workflow-app xmlns='uri:oozie:workflow:0.4' name='app'>" +
                 "<start to='java' />" +
                 "       <action name='java'>" +
                 "<java>" +
@@ -571,6 +574,7 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
             Writer writer = new OutputStreamWriter(fs.create(subWorkflowPath));
             writer.write(getLazyWorkflow());
             writer.close();
+
             String workflowUri = getTestCaseFileUri("workflow.xml");
             String appXml = "<workflow-app xmlns=\"uri:oozie:workflow:0.4\" name=\"workflow\">" +
                     "<start to=\"subwf\"/>" +
@@ -626,12 +630,199 @@ public class TestSubWorkflowActionExecutor extends ActionExecutorTestCase {
             });
 
             WorkflowJob job = wfClient.getJobInfo(wfClient.getJobInfo(jobId).getActions().get(2).getExternalId());
-            assertEquals(job.getStatus(), WorkflowJob.Status.SUCCEEDED);
+            assertEquals(WorkflowJob.Status.SUCCEEDED, job.getStatus());
             assertEquals(job.getId(), subWorkflowExternalId);
 
         } finally {
             LocalOozie.stop();
         }
 
+    }
+
+    public void testParentGlobalConf() throws Exception {
+        try {
+            Path subWorkflowAppPath = createSubWorkflowXml();
+
+            String workflowUri = createTestWorkflowXml(subWorkflowAppPath);
+            LocalOozie.start();
+            final OozieClient wfClient = LocalOozie.getClient();
+            Properties conf = wfClient.createConfiguration();
+            conf.setProperty(OozieClient.APP_PATH, workflowUri);
+            conf.setProperty(OozieClient.USER_NAME, getTestUser());
+            conf.setProperty("appName", "var-app-name");
+            final String jobId = wfClient.submit(conf);
+            wfClient.start(jobId);
+
+            waitFor(JOB_TIMEOUT, new Predicate() {
+                public boolean evaluate() throws Exception {
+                    return (wfClient.getJobInfo(jobId).getStatus() == WorkflowJob.Status.SUCCEEDED) &&
+                            (wfClient.getJobInfo(jobId).getActions().get(1).getStatus() == WorkflowAction.Status.OK);
+                }
+            });
+            WorkflowJob subWorkflow = wfClient.getJobInfo(wfClient.getJobInfo(jobId).
+                    getActions().get(1).getExternalId());
+
+            Configuration subWorkflowConf = getWorkflowConfig(subWorkflow);
+            Element eConf = XmlUtils.parseXml(subWorkflow.getActions().get(1).getConf());
+            Element element = eConf.getChild("configuration", eConf.getNamespace());
+            Configuration actionConf = new XConfiguration(new StringReader(XmlUtils.prettyPrint(element).toString()));
+
+
+            assertEquals("foo1", actionConf.get("foo1"));
+            assertEquals("subconf", actionConf.get("foo2"));
+            assertEquals("foo3", actionConf.get("foo3"));
+
+            // Checking the action conf configuration.
+            assertEquals("actionconf", subWorkflowConf.get("foo3"));
+        } finally {
+            LocalOozie.stop();
+        }
+    }
+
+    public void testParentGlobalConfWithConfigDefault() throws Exception {
+        try {
+            Path subWorkflowAppPath = createSubWorkflowXml();
+
+            createConfigDefaultXml();
+
+            String workflowUri = createTestWorkflowXml(subWorkflowAppPath);
+
+            LocalOozie.start();
+            final OozieClient wfClient = LocalOozie.getClient();
+            Properties conf = wfClient.createConfiguration();
+            conf.setProperty(OozieClient.APP_PATH, workflowUri);
+            conf.setProperty(OozieClient.USER_NAME, getTestUser());
+            conf.setProperty("appName", "var-app-name");
+            conf.setProperty("foo", "other");
+            final String jobId = wfClient.submit(conf);
+            wfClient.start(jobId);
+            // configuration should have overridden value
+            assertEquals("other",
+                    new XConfiguration(new StringReader(wfClient.getJobInfo(jobId).getConf())).get("foo"));
+
+            waitFor(JOB_TIMEOUT, new Predicate() {
+                public boolean evaluate() throws Exception {
+                    return (wfClient.getJobInfo(jobId).getStatus() == WorkflowJob.Status.SUCCEEDED) &&
+                            (wfClient.getJobInfo(jobId).getActions().get(1).getStatus() == WorkflowAction.Status.OK);
+                }
+            });
+            WorkflowJob subWorkflow = wfClient.getJobInfo(wfClient.getJobInfo(jobId).
+                    getActions().get(1).getExternalId());
+
+            Configuration subWorkflowConf = getWorkflowConfig(subWorkflow);
+            Element eConf = XmlUtils.parseXml(subWorkflow.getActions().get(1).getConf());
+            Element element = eConf.getChild("configuration", eConf.getNamespace());
+            Configuration actionConf = new XConfiguration(new StringReader(XmlUtils.prettyPrint(element).toString()));
+
+            // configuration in subWorkflow should have overridden value
+            assertEquals("other", subWorkflowConf.get("foo"));
+
+            assertEquals("foo1", actionConf.get("foo1"));
+            assertEquals("subconf", actionConf.get("foo2"));
+            assertEquals("foo3", actionConf.get("foo3"));
+            // Checking the action conf configuration.
+            assertEquals("actionconf", subWorkflowConf.get("foo3"));
+
+        } finally {
+            LocalOozie.stop();
+        }
+    }
+
+    private Configuration getWorkflowConfig(WorkflowJob workflow) throws IOException {
+        return new XConfiguration(new StringReader(workflow.getConf()));
+    }
+
+    private String createTestWorkflowXml(Path subWorkflowAppPath) throws IOException {
+        String workflowUri = getTestCaseFileUri("workflow.xml");
+        String appXml = "<workflow-app xmlns=\"uri:oozie:workflow:0.4\" name=\"workflow\">" +
+                "<global>" +
+                "   <configuration>" +
+                "        <property>" +
+                "            <name>foo2</name>" +
+                "            <value>foo2</value>" +
+                "        </property>" +
+                "        <property>" +
+                "            <name>foo3</name>" +
+                "            <value>foo3</value>" +
+                "        </property>" +
+                "    </configuration>" +
+                "</global>" +
+                "<start to=\"subwf\"/>" +
+                "<action name=\"subwf\">" +
+                "     <sub-workflow xmlns='uri:oozie:workflow:0.4'>" +
+                "          <app-path>" + subWorkflowAppPath.toString() + "</app-path>" +
+                "<propagate-configuration/>" +
+                "   <configuration>" +
+                "        <property>" +
+                "            <name>foo3</name>" +
+                "            <value>actionconf</value>" +
+                "        </property>" +
+                "   </configuration>" +
+                "     </sub-workflow>" +
+                "     <ok to=\"end\"/>" +
+                "     <error to=\"fail\"/>" +
+                "</action>" +
+                "<kill name=\"fail\">" +
+                "     <message>Sub workflow failed, error message[${wf:errorMessage(wf:lastErrorNode())}]</message>" +
+                "</kill>" +
+                "<end name=\"end\"/>" +
+                "</workflow-app>";
+
+        writeToFile(appXml, workflowUri);
+        return workflowUri;
+    }
+
+    private Path createSubWorkflowXml() throws IOException {
+        Path subWorkflowAppPath = getFsTestCaseDir();
+        FileSystem fs = getFileSystem();
+        Path subWorkflowPath = new Path(subWorkflowAppPath, "workflow.xml");
+        Writer writer = new OutputStreamWriter(fs.create(subWorkflowPath));
+        writer.write(getWorkflow());
+        writer.close();
+        return subWorkflowAppPath;
+    }
+
+    private void createConfigDefaultXml() throws IOException {
+        String config_defaultUri=getTestCaseFileUri("config-default.xml");
+        String config_default="<configuration>\n" +
+                "<property>\n" +
+                "<name>foo</name>\n" +
+                "<value>default</value>\n" +
+                "</property>\n" +
+                "</configuration>";
+
+        writeToFile(config_default, config_defaultUri);
+    }
+
+    public String getWorkflow() {
+        return  "<workflow-app xmlns='uri:oozie:workflow:0.4' name='app'>" +
+                "<global>" +
+                "   <configuration>" +
+                "        <property>" +
+                "            <name>foo1</name>" +
+                "            <value>foo1</value>" +
+                "        </property>" +
+                "        <property>" +
+                "            <name>foo2</name>" +
+                "            <value>subconf</value>" +
+                "        </property>" +
+                "    </configuration>" +
+                "</global>" +
+                "<start to='java' />" +
+                "<action name='java'>" +
+                "<java>" +
+                "<job-tracker>" + getJobTrackerUri() + "</job-tracker>" +
+                "<name-node>" + getNameNodeUri() + "</name-node>" +
+                "<main-class>" + LauncherMainTester.class.getName() + "</main-class>" +
+                "<arg>exit0</arg>" +
+                "</java>"
+                + "<ok to='end' />"
+                + "<error to='fail' />"
+                + "</action>"
+                + "<kill name='fail'>"
+                + "<message>shell action fail, error message[${wf:errorMessage(wf:lastErrorNode())}]</message>"
+                + "</kill>"
+                + "<end name='end' />"
+                + "</workflow-app>";
     }
 }

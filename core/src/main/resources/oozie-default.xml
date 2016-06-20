@@ -538,6 +538,14 @@
 	</property>
 
     <property>
+        <name>oozie.service.coord.input.check.requeue.interval.increase</name>
+        <value>0</value>
+        <description>This value (in seconds) will be added into oozie.service.coord.input.check.requeue.interval and resulting value
+will be the requeue interval for the actions which are waiting for a long time without any input.
+        </description>
+    </property>
+
+    <property>
         <name>oozie.service.coord.push.check.requeue.interval
         </name>
         <value>600000</value>
@@ -941,6 +949,7 @@
             coord:future=org.apache.oozie.coord.CoordELFunctions#ph1_coord_future_echo,
             coord:futureRange=org.apache.oozie.coord.CoordELFunctions#ph1_coord_futureRange_echo,
             coord:formatTime=org.apache.oozie.coord.CoordELFunctions#ph1_coord_formatTime_echo,
+            coord:epochTime=org.apache.oozie.coord.CoordELFunctions#ph1_coord_epochTime_echo,
             coord:conf=org.apache.oozie.coord.CoordELFunctions#coord_conf,
             coord:user=org.apache.oozie.coord.CoordELFunctions#coord_user,
             coord:absolute=org.apache.oozie.coord.CoordELFunctions#ph1_coord_absolute_echo,
@@ -995,6 +1004,7 @@
             coord:dateOffset=org.apache.oozie.coord.CoordELFunctions#ph1_coord_dateOffset_echo,
             coord:dateTzOffset=org.apache.oozie.coord.CoordELFunctions#ph1_coord_dateTzOffset_echo,
             coord:formatTime=org.apache.oozie.coord.CoordELFunctions#ph1_coord_formatTime_echo,
+            coord:epochTime=org.apache.oozie.coord.CoordELFunctions#ph1_coord_epochTime_echo,
             coord:actionId=org.apache.oozie.coord.CoordELFunctions#ph1_coord_actionId_echo,
             coord:name=org.apache.oozie.coord.CoordELFunctions#ph1_coord_name_echo,
             coord:conf=org.apache.oozie.coord.CoordELFunctions#coord_conf,
@@ -1064,6 +1074,7 @@
             coord:dateOffset=org.apache.oozie.coord.CoordELFunctions#ph1_coord_dateOffset_echo,
             coord:dateTzOffset=org.apache.oozie.coord.CoordELFunctions#ph1_coord_dateTzOffset_echo,
             coord:formatTime=org.apache.oozie.coord.CoordELFunctions#ph1_coord_formatTime_echo,
+            coord:epochTime=org.apache.oozie.coord.CoordELFunctions#ph1_coord_epochTime_echo,
             coord:actionId=org.apache.oozie.coord.CoordELFunctions#ph1_coord_actionId_echo,
             coord:name=org.apache.oozie.coord.CoordELFunctions#ph1_coord_name_echo,
             coord:conf=org.apache.oozie.coord.CoordELFunctions#coord_conf,
@@ -1125,6 +1136,7 @@
             coord:actionId=org.apache.oozie.coord.CoordELFunctions#ph2_coord_actionId,
             coord:name=org.apache.oozie.coord.CoordELFunctions#ph2_coord_name,
             coord:formatTime=org.apache.oozie.coord.CoordELFunctions#ph2_coord_formatTime,
+            coord:epochTime=org.apache.oozie.coord.CoordELFunctions#ph2_coord_epochTime,
             coord:conf=org.apache.oozie.coord.CoordELFunctions#coord_conf,
             coord:user=org.apache.oozie.coord.CoordELFunctions#coord_user,
             coord:absolute=org.apache.oozie.coord.CoordELFunctions#ph2_coord_absolute_echo,
@@ -1182,6 +1194,7 @@
             coord:future=org.apache.oozie.coord.CoordELFunctions#ph2_coord_future_echo,
             coord:futureRange=org.apache.oozie.coord.CoordELFunctions#ph2_coord_futureRange_echo,
             coord:formatTime=org.apache.oozie.coord.CoordELFunctions#ph2_coord_formatTime,
+            coord:epochTime=org.apache.oozie.coord.CoordELFunctions#ph2_coord_epochTime,
             coord:conf=org.apache.oozie.coord.CoordELFunctions#coord_conf,
             coord:user=org.apache.oozie.coord.CoordELFunctions#coord_user,
             coord:absolute=org.apache.oozie.coord.CoordELFunctions#ph2_coord_absolute_echo,
@@ -1237,6 +1250,7 @@
             coord:dateOffset=org.apache.oozie.coord.CoordELFunctions#ph2_coord_dateOffset,
             coord:dateTzOffset=org.apache.oozie.coord.CoordELFunctions#ph2_coord_dateTzOffset,
             coord:formatTime=org.apache.oozie.coord.CoordELFunctions#ph2_coord_formatTime,
+            coord:epochTime=org.apache.oozie.coord.CoordELFunctions#ph2_coord_epochTime,
             coord:actionId=org.apache.oozie.coord.CoordELFunctions#ph2_coord_actionId,
             coord:name=org.apache.oozie.coord.CoordELFunctions#ph2_coord_name,
             coord:conf=org.apache.oozie.coord.CoordELFunctions#coord_conf,
@@ -1299,6 +1313,7 @@
             coord:dateOffset=org.apache.oozie.coord.CoordELFunctions#ph3_coord_dateOffset,
             coord:dateTzOffset=org.apache.oozie.coord.CoordELFunctions#ph3_coord_dateTzOffset,
             coord:formatTime=org.apache.oozie.coord.CoordELFunctions#ph3_coord_formatTime,
+            coord:epochTime=org.apache.oozie.coord.CoordELFunctions#ph3_coord_epochTime,
             coord:actionId=org.apache.oozie.coord.CoordELFunctions#ph3_coord_actionId,
             coord:name=org.apache.oozie.coord.CoordELFunctions#ph3_coord_name,
             coord:conf=org.apache.oozie.coord.CoordELFunctions#coord_conf,
@@ -1482,6 +1497,19 @@
         </description>
     </property>
 
+    <property>
+        <name>oozie.service.JPAService.openjpa.BrokerImpl</name>
+        <value>non-finalizing</value>
+        <description>
+          The default OpenJPAEntityManager implementation automatically closes itself during instance finalization.
+          This guards against accidental resource leaks that may occur if a developer fails to explicitly close
+          EntityManagers when finished with them, but it also incurs a scalability bottleneck, since the JVM must
+          perform synchronization during instance creation, and since the finalizer thread will have more instances to monitor.
+          To avoid this overhead, set the openjpa.BrokerImpl configuration property to non-finalizing.
+          To use default implementation set it to empty space.
+       </description>
+    </property>
+
    <!-- SchemaService -->
 
     <property>
@@ -1497,7 +1525,7 @@
             distcp-action-0.1.xsd,distcp-action-0.2.xsd,
             oozie-sla-0.1.xsd,oozie-sla-0.2.xsd,
             hive2-action-0.1.xsd, hive2-action-0.2.xsd,
-            spark-action-0.1.xsd
+            spark-action-0.1.xsd,spark-action-0.2.xsd
         </value>
         <description>
             List of schemas for workflows (separated by commas).
@@ -1516,7 +1544,7 @@
         <name>oozie.service.SchemaService.coord.schemas</name>
         <value>
             oozie-coordinator-0.1.xsd,oozie-coordinator-0.2.xsd,oozie-coordinator-0.3.xsd,oozie-coordinator-0.4.xsd,
-            oozie-sla-0.1.xsd,oozie-sla-0.2.xsd
+            oozie-coordinator-0.5.xsd,oozie-sla-0.1.xsd,oozie-sla-0.2.xsd
         </value>
         <description>
             List of schemas for coordinators (separated by commas).
@@ -1793,6 +1821,36 @@
     </property>
 
     <property>
+        <name>oozie.action.shell.setup.hadoop.conf.dir.write.log4j.properties</name>
+        <value>true</value>
+        <description>
+            Toggle to control if a log4j.properties file should be written into the configuration directory prepared when
+            oozie.action.shell.setup.hadoop.conf.dir is enabled. This is used to control logging behavior of log4j using commands
+            run within the shell action script, and to ensure logging does not impact output data capture if leaked to stdout.
+            Content of the written file is determined by the value of oozie.action.shell.setup.hadoop.conf.dir.log4j.content.
+        </description>
+    </property>
+
+    <property>
+        <name>oozie.action.shell.setup.hadoop.conf.dir.log4j.content</name>
+        <value>
+            log4j.rootLogger=${hadoop.root.logger}
+            hadoop.root.logger=INFO,console
+            log4j.appender.console=org.apache.log4j.ConsoleAppender
+            log4j.appender.console.target=System.err
+            log4j.appender.console.layout=org.apache.log4j.PatternLayout
+            log4j.appender.console.layout.ConversionPattern=%d{yy/MM/dd HH:mm:ss} %p %c{2}: %m%n
+        </value>
+        <description>
+            The value to write into a log4j.properties file under the config directory created when
+            oozie.action.shell.setup.hadoop.conf.dir and oozie.action.shell.setup.hadoop.conf.dir.write.log4j.properties
+            properties are both enabled. The values must be properly newline separated and in format expected by Log4J.
+            Trailing and preceding whitespaces will be trimmed when reading this property.
+            This is used to control logging behavior of log4j using commands run within the shell action script.
+        </description>
+    </property>
+
+    <property>
         <name>oozie.action.launcher.yarn.timeline-service.enabled</name>
         <value>false</value>
         <description>
@@ -1801,6 +1859,14 @@
             distributed cache.
             This can be overridden on a per-action basis by setting
             oozie.launcher.yarn.timeline-service.enabled in an action's configuration section in a workflow.
+        </description>
+    </property>
+
+    <property>
+        <name>oozie.action.rootlogger.log.level</name>
+        <value>INFO</value>
+        <description>
+            Logging level for root logger
         </description>
     </property>
 
@@ -2365,8 +2431,22 @@
         <name>oozie.zookeeper.connection.timeout</name>
         <value>180</value>
         <description>
-        Default ZK connection timeout (in sec). If connection is lost for more than timeout, then Oozie server will shutdown
-        itself if oozie.zookeeper.server.shutdown.ontimeout is true.
+        Default ZK connection timeout (in sec).
+        </description>
+    </property>
+    <property>
+        <name>oozie.zookeeper.session.timeout</name>
+        <value>300</value>
+        <description>
+            Default ZK session timeout (in sec). If connection is lost even after retry, then Oozie server will shutdown
+            itself if oozie.zookeeper.server.shutdown.ontimeout is true.
+        </description>
+    </property>
+    <property>
+        <name>oozie.zookeeper.max.retries</name>
+        <value>10</value>
+        <description>
+            Maximum number of times to retry.
         </description>
     </property>
 
@@ -2648,6 +2728,62 @@
             This value determines whether to support email attachment of a file on HDFS.
             Set it false if there is any security concern.
         </description>
+    </property>
+
+    <property>
+      <name>oozie.email.smtp.host</name>
+      <value>localhost</value>
+      <description>
+          The host where the email action may find the SMTP server.
+      </description>
+    </property>
+
+    <property>
+      <name>oozie.email.smtp.port</name>
+      <value>25</value>
+      <description>
+          The port to connect to for the SMTP server, for email actions.
+      </description>
+    </property>
+
+    <property>
+      <name>oozie.email.smtp.auth</name>
+      <value>false</value>
+      <description>
+          Boolean property that toggles if authentication is to be done or not when using email actions.
+      </description>
+    </property>
+
+    <property>
+      <name>oozie.email.smtp.username</name>
+      <value></value>
+      <description>
+          If authentication is enabled for email actions, the username to login as (to the SMTP server).
+      </description>
+    </property>
+
+    <property>
+      <name>oozie.email.smtp.password</name>
+      <value></value>
+      <description>
+          If authentication is enabled for email actions, the password to login with (to the SMTP server).
+      </description>
+    </property>
+
+    <property>
+      <name>oozie.email.from.address</name>
+      <value>oozie@localhost</value>
+      <description>
+          The from address to be used for mailing all emails done via the email action.
+      </description>
+    </property>
+
+    <property>
+      <name>oozie.email.smtp.socket.timeout.ms</name>
+      <value>10000</value>
+      <description>
+          The timeout to apply over all SMTP server socket operations done during the email action.
+      </description>
     </property>
 
     <property>

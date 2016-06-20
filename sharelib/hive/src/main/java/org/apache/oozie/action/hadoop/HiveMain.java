@@ -69,7 +69,7 @@ public class HiveMain extends LauncherMain {
         run(HiveMain.class, args);
     }
 
-    private static Configuration initActionConf() {
+    private static Configuration initActionConf() throws java.io.IOException {
         // Loading action conf prepared by Oozie
         Configuration hiveConf = new Configuration(false);
 
@@ -117,7 +117,9 @@ public class HiveMain extends LauncherMain {
         // to force hive to use the jobclient to submit the job, never using HADOOPBIN (to do localmode)
         hiveConf.setBoolean("hive.exec.mode.local.auto", false);
 
-        hiveConf.set("hive.querylog.location", "./hivelogs");
+        String pwd = new java.io.File("").getCanonicalPath();
+        hiveConf.set("hive.querylog.location", pwd + File.separator + "hivetmp" + File.separator + "querylog");
+        hiveConf.set("hive.exec.local.scratchdir", pwd + File.separator + "hivetmp" + File.separator + "scratchdir");
 
         return hiveConf;
     }
@@ -141,7 +143,9 @@ public class HiveMain extends LauncherMain {
         }
 
         String logLevel = hiveConf.get("oozie.hive.log.level", "INFO");
+        String rootLogLevel = hiveConf.get("oozie.action." + LauncherMapper.ROOT_LOGGER_LEVEL, "INFO");
 
+        hadoopProps.setProperty("log4j.rootLogger", rootLogLevel + ", A");
         hadoopProps.setProperty("log4j.logger.org.apache.hadoop.hive", logLevel + ", A");
         hadoopProps.setProperty("log4j.logger.hive", logLevel + ", A");
         hadoopProps.setProperty("log4j.logger.DataNucleus", logLevel + ", A");
@@ -149,13 +153,14 @@ public class HiveMain extends LauncherMain {
         hadoopProps.setProperty("log4j.logger.JPOX", logLevel + ", A");
         hadoopProps.setProperty("log4j.appender.A", "org.apache.log4j.ConsoleAppender");
         hadoopProps.setProperty("log4j.appender.A.layout", "org.apache.log4j.PatternLayout");
-        hadoopProps.setProperty("log4j.appender.A.layout.ConversionPattern", "%-4r [%t] %-5p %c %x - %m%n");
+        hadoopProps.setProperty("log4j.appender.A.layout.ConversionPattern", "%-4r [%t] -5p %c %x - %m%n");
 
         hadoopProps.setProperty("log4j.appender.jobid", "org.apache.log4j.FileAppender");
         hadoopProps.setProperty("log4j.appender.jobid.file", logFile);
         hadoopProps.setProperty("log4j.appender.jobid.layout", "org.apache.log4j.PatternLayout");
         hadoopProps.setProperty("log4j.appender.jobid.layout.ConversionPattern", "%-4r [%t] %-5p %c %x - %m%n");
         hadoopProps.setProperty("log4j.logger.org.apache.hadoop.hive.ql.exec", "INFO, jobid");
+        hadoopProps.setProperty("log4j.logger.SessionState", "INFO, jobid");
 
         String localProps = new File(HIVE_L4J_PROPS).getAbsolutePath();
         OutputStream os1 = new FileOutputStream(localProps);
@@ -197,6 +202,7 @@ public class HiveMain extends LauncherMain {
         return hiveConf;
     }
 
+    @Override
     protected void run(String[] args) throws Exception {
         System.out.println();
         System.out.println("Oozie Hive action configuration");

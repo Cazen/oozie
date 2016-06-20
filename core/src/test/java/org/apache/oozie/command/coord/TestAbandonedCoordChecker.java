@@ -48,7 +48,8 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
 
     public void tesAbandonedFailed() throws Exception {
         Date start = DateUtils.addMonths(new Date(), -1);
-        Date end = new Date(start.getTime() + (4 * 60 * 60 * 1000)); // 4 hrs
+        Date end = DateUtils.addHours(new Date(), 4); // 4 hrs
+
         Date createdTime = start;
 
         final CoordinatorJobBean job1 = addRecordToCoordJobTable(CoordinatorJob.Status.RUNNING, start, end,
@@ -59,7 +60,7 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
                 createdTime, true, false, 4);
         addRecordToCoordActionTable(job2.getId(), 4, CoordinatorAction.Status.FAILED);
 
-        AbandonedCoordCheckerRunnable coordChecked = new AbandonedCoordCheckerRunnable(5);
+        ExtendedAbandonedCoordCheckerRunnable coordChecked = new ExtendedAbandonedCoordCheckerRunnable(5);
         coordChecked.run();
         String msg = coordChecked.getMessage();
         assertTrue(msg.contains(job1.getId()));
@@ -67,9 +68,9 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
 
     }
 
-    public void testAbandoned_notAbandoned() throws Exception {
+    public void testNoAbandoned() throws Exception {
         Date start = DateUtils.addMonths(new Date(), -1);
-        Date end = new Date(start.getTime() + (4 * 60 * 60 * 1000)); // 4 hrs
+        Date end = DateUtils.addHours(new Date(), 4); // 4 hrs
 
         Date createdTime = start;
 
@@ -85,16 +86,14 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
         addRecordToCoordActionTable(job2.getId(), 6, CoordinatorAction.Status.SUCCEEDED,
                 CoordinatorAction.Status.FAILED);
 
-        AbandonedCoordCheckerRunnable coordChecked = new AbandonedCoordCheckerRunnable(5);
+        ExtendedAbandonedCoordCheckerRunnable coordChecked = new ExtendedAbandonedCoordCheckerRunnable(5);
         coordChecked.run();
-        String msg = coordChecked.getMessage();
-        assertFalse(msg.contains(job1.getId()));
-        assertFalse(msg.contains(job2.getId()));
+        assertNull(coordChecked.getMessage());
     }
 
     public void testMessage_withTimedout() throws Exception {
         Date start = DateUtils.addMonths(new Date(), -1);
-        Date end = new Date(start.getTime() + (4 * 60 * 60 * 1000)); // 4 hrs
+        Date end = DateUtils.addHours(new Date(), 4); // 4 hrs
         Date createdTime = start;
 
         final CoordinatorJobBean job1 = addRecordToCoordJobTable(CoordinatorJob.Status.RUNNING, start, end,
@@ -106,7 +105,7 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
                 createdTime, true, false, 4);
         addRecordToCoordActionTable(job2.getId(), 4, CoordinatorAction.Status.TIMEDOUT);
 
-        AbandonedCoordCheckerRunnable coordChecked = new AbandonedCoordCheckerRunnable(10);
+        ExtendedAbandonedCoordCheckerRunnable coordChecked = new ExtendedAbandonedCoordCheckerRunnable(10);
         coordChecked.run();
         String msg = coordChecked.getMessage();
         assertTrue(msg.contains(job1.getId()));
@@ -116,7 +115,7 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
 
     public void testMessage_withMixedStatus() throws Exception {
         Date start = DateUtils.addMonths(new Date(), -1);
-        Date end = new Date(start.getTime() + (4 * 60 * 60 * 1000)); // 4 hrs
+        Date end = DateUtils.addHours(new Date(), 4); // 4 hrs
         Date createdTime = start;
 
         final CoordinatorJobBean job1 = addRecordToCoordJobTable(CoordinatorJob.Status.RUNNING, start, end,
@@ -136,7 +135,7 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
         addRecordToCoordActionTable(job3.getId(), 5, CoordinatorAction.Status.FAILED,
                 CoordinatorAction.Status.SUSPENDED, CoordinatorAction.Status.TIMEDOUT);
 
-        AbandonedCoordCheckerRunnable coordChecked = new AbandonedCoordCheckerRunnable(5);
+        ExtendedAbandonedCoordCheckerRunnable coordChecked = new ExtendedAbandonedCoordCheckerRunnable(5);
         coordChecked.run();
         String msg = coordChecked.getMessage();
         assertTrue(msg.contains(job1.getId()));
@@ -146,7 +145,7 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
 
     public void testKill() throws Exception {
         Date start = DateUtils.addMonths(new Date(), -1);
-        Date end = new Date(start.getTime() + (4 * 60 * 60 * 1000)); // 4 hrs
+        Date end = DateUtils.addHours(new Date(), 4); // 4 hrs
         Date createdTime = start;
 
         CoordinatorJobBean job1 = addRecordToCoordJobTable(CoordinatorJob.Status.RUNNING, start, end, createdTime,
@@ -187,7 +186,7 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
 
     public void testCatchupJob() throws Exception {
         Date start = DateUtils.addMonths(new Date(), -1);
-        Date end = new Date(start.getTime() + (4 * 60 * 60 * 1000)); // 4 hrs
+        Date end = DateUtils.addHours(new Date(), 4); // 4 hrs
         Date createdTime = DateUtils.addDays(new Date(), -1);
 
         CoordinatorJobBean job1 = addRecordToCoordJobTable(CoordinatorJob.Status.RUNNING, start, end, createdTime,
@@ -217,6 +216,21 @@ public class TestAbandonedCoordChecker extends XDataTestCase {
                 jobStatus = status[i - 1];
             }
             addRecordToCoordActionTable(jobId, i, jobStatus, "coord-action-get.xml", 0);
+        }
+    }
+
+    public static class ExtendedAbandonedCoordCheckerRunnable extends AbandonedCoordCheckerRunnable {
+        String message;
+
+        public ExtendedAbandonedCoordCheckerRunnable(int failureLimit) {
+            super(failureLimit);
+        }
+
+        public void sendMail(String body) throws Exception {
+            message = body;
+        }
+        public String getMessage(){
+            return message;
         }
     }
 }

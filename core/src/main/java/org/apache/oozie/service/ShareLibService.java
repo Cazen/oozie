@@ -287,12 +287,11 @@ public class ShareLibService implements Service, Instrumentable {
         try {
             if (fs.isFile(new Path(new URI(rootDir.toString()).getPath()))) {
                 Path filePath = new Path(new URI(rootDir.toString()).getPath());
-
+                Path qualifiedRootDirPath = fs.makeQualified(rootDir);
                 if (isFilePartOfConfList(rootDir)) {
                     cachePropertyFile(filePath, shareLibKey, shareLibConfigMap);
                 }
-
-                listOfPaths.add(rootDir);
+                listOfPaths.add(qualifiedRootDirPath);
                 return;
             }
 

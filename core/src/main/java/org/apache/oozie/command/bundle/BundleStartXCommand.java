@@ -38,7 +38,6 @@ import org.apache.oozie.client.rest.JsonBean;
 import org.apache.oozie.command.CommandException;
 import org.apache.oozie.command.PreconditionException;
 import org.apache.oozie.command.StartTransitionXCommand;
-import org.apache.oozie.command.coord.CoordSubmitXCommand;
 import org.apache.oozie.executor.jpa.BatchQueryExecutor;
 import org.apache.oozie.executor.jpa.BundleJobQueryExecutor;
 import org.apache.oozie.executor.jpa.BundleJobQueryExecutor.BundleJobQuery;
@@ -174,6 +173,11 @@ public class BundleStartXCommand extends StartTransitionXCommand {
                         if (map.containsKey(name.getValue())) {
                             throw new CommandException(ErrorCode.E1304, name);
                         }
+                        Configuration coordConf = mergeConfig(elem);
+                        // skip coord job if it is not enabled
+                        if (!isEnabled(elem, coordConf)) {
+                            continue;
+                        }
                         boolean isCritical = false;
                         if (critical != null && Boolean.parseBoolean(critical.getValue())) {
                             isCritical = true;
@@ -249,6 +253,10 @@ public class BundleStartXCommand extends StartTransitionXCommand {
                     if (OozieJobInfo.isJobInfoEnabled()) {
                         coordConf.set(OozieJobInfo.BUNDLE_NAME, bundleJob.getAppName());
                     }
+                    // skip coord job if it is not enabled
+                    if (!isEnabled(coordElem, coordConf)) {
+                        continue;
+                    }
                     String coordName=name.getValue();
                     try {
                         coordName = ELUtils.resolveAppName(coordName, coordConf);
@@ -257,7 +265,7 @@ public class BundleStartXCommand extends StartTransitionXCommand {
                         throw new CommandException(ErrorCode.E1321, e.getMessage(), e);
 
                     }
-                    queue(new CoordSubmitXCommand(coordConf, bundleJob.getId(), name.getValue()));
+                    queue(new BundleCoordSubmitXCommand(coordConf, bundleJob.getId(), name.getValue()));
 
                 }
                 updateBundleAction();
@@ -350,4 +358,29 @@ public class BundleStartXCommand extends StartTransitionXCommand {
     public void updateJob() throws CommandException {
         updateList.add(new UpdateEntry<BundleJobQuery>(BundleJobQuery.UPDATE_BUNDLE_JOB_STATUS_PENDING, bundleJob));
     }
+
+    /**
+     * Checks whether the coordinator is enabled
+     *
+     * @param coordElem
+     * @param coordConf
+     * @return true if coordinator is enabled, otherwise false.
+     * @throws CommandException
+     */
+    private boolean isEnabled(Element coordElem, Configuration coordConf) throws CommandException {
+        Attribute enabled = coordElem.getAttribute("enabled");
+        if (enabled == null) {
+            // default is true
+            return true;
+        }
+        String isEnabled = enabled.getValue();
+        try {
+            isEnabled = ELUtils.resolveAppName(isEnabled, coordConf);
+        }
+        catch (Exception e) {
+            throw new CommandException(ErrorCode.E1321, e.getMessage(), e);
+        }
+        return Boolean.parseBoolean(isEnabled);
+    }
+
 }

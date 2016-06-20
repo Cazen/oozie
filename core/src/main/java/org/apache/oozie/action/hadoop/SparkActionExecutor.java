@@ -18,20 +18,25 @@
 
 package org.apache.oozie.action.hadoop;
 
+import java.io.IOException;
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapred.RunningJob;
 import org.apache.oozie.action.ActionExecutorException;
 import org.apache.oozie.client.WorkflowAction;
+import org.apache.oozie.service.HadoopAccessorException;
 import org.apache.oozie.service.Services;
 import org.apache.oozie.service.SparkConfigurationService;
 import org.jdom.Element;
+import org.jdom.JDOMException;
 import org.jdom.Namespace;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 
 public class SparkActionExecutor extends JavaActionExecutor {
     public static final String SPARK_MAIN_CLASS_NAME = "org.apache.oozie.action.hadoop.SparkMain";
@@ -43,6 +48,7 @@ public class SparkActionExecutor extends JavaActionExecutor {
     public static final String SPARK_JOB_NAME = "oozie.spark.name";
     public static final String SPARK_CLASS = "oozie.spark.class";
     public static final String SPARK_JAR = "oozie.spark.jar";
+    public static final String MAPRED_CHILD_ENV = "mapred.child.env";
 
     public SparkActionExecutor() {
         super("spark");
@@ -107,6 +113,26 @@ public class SparkActionExecutor extends JavaActionExecutor {
     }
 
     @Override
+    Configuration setupLauncherConf(Configuration conf, Element actionXml, Path appPath, Context context)
+            throws ActionExecutorException {
+        super.setupLauncherConf(conf, actionXml, appPath, context);
+
+        // Set SPARK_HOME environment variable on launcher job
+        // It is needed since pyspark client checks for it.
+        String sparkHome = "SPARK_HOME=.";
+        String mapredChildEnv = conf.get("oozie.launcher." + MAPRED_CHILD_ENV);
+
+        if (mapredChildEnv == null) {
+            conf.set(MAPRED_CHILD_ENV, sparkHome);
+            conf.set("oozie.launcher." + MAPRED_CHILD_ENV, sparkHome);
+        } else if (!mapredChildEnv.contains("SPARK_HOME")) {
+            conf.set(MAPRED_CHILD_ENV, mapredChildEnv + "," + sparkHome);
+            conf.set("oozie.launcher." + MAPRED_CHILD_ENV, mapredChildEnv + "," + sparkHome);
+        }
+        return conf;
+    }
+
+    @Override
     public List<Class> getLauncherClasses() {
         List<Class> classes = new ArrayList<Class>();
         try {
@@ -134,4 +160,15 @@ public class SparkActionExecutor extends JavaActionExecutor {
         return launcherConf.get(LauncherMapper.CONF_OOZIE_ACTION_MAIN_CLASS, SPARK_MAIN_CLASS_NAME);
     }
 
+    @Override
+    protected void getActionData(FileSystem actionFs, RunningJob runningJob, WorkflowAction action, Context context)
+            throws HadoopAccessorException, JDOMException, IOException, URISyntaxException {
+        super.getActionData(actionFs, runningJob, action, context);
+        readExternalChildIDs(action, context);
+    }
+
+    @Override
+    protected boolean getCaptureOutput(WorkflowAction action) throws JDOMException {
+        return true;
+    }
 }

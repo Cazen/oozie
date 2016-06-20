@@ -33,9 +33,9 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Properties;
 import java.util.Set;
-import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -45,12 +45,15 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.AccessControlException;
+import org.apache.hadoop.hive.shims.HadoopShims;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.JobClient;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.JobID;
 import org.apache.hadoop.mapred.RunningJob;
 import org.apache.hadoop.mapreduce.security.token.delegation.DelegationTokenIdentifier;
+import org.apache.hadoop.security.token.Token;
+import org.apache.hadoop.security.token.TokenIdentifier;
 import org.apache.hadoop.util.DiskChecker;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
@@ -67,6 +70,7 @@ import org.apache.oozie.service.Services;
 import org.apache.oozie.service.ShareLibService;
 import org.apache.oozie.service.URIHandlerService;
 import org.apache.oozie.service.WorkflowAppService;
+import org.apache.oozie.util.ELEvaluationException;
 import org.apache.oozie.util.ELEvaluator;
 import org.apache.oozie.util.JobUtils;
 import org.apache.oozie.util.LogUtils;
@@ -74,13 +78,9 @@ import org.apache.oozie.util.PropertiesUtils;
 import org.apache.oozie.util.XConfiguration;
 import org.apache.oozie.util.XLog;
 import org.apache.oozie.util.XmlUtils;
-import org.apache.oozie.util.ELEvaluationException;
 import org.jdom.Element;
 import org.jdom.JDOMException;
 import org.jdom.Namespace;
-import org.apache.hadoop.security.token.Token;
-import org.apache.hadoop.security.token.TokenIdentifier;
-import org.apache.oozie.hadoop.utils.HadoopShims;
 
 
 public class JavaActionExecutor extends ActionExecutor {
@@ -234,7 +234,7 @@ public class JavaActionExecutor extends ActionExecutor {
         return createBaseHadoopConf(context, actionXml);
     }
 
-    private void injectLauncherProperties(Configuration srcConf, Configuration launcherConf) {
+    private static void injectLauncherProperties(Configuration srcConf, Configuration launcherConf) {
         for (Map.Entry<String, String> entry : srcConf) {
             if (entry.getKey().startsWith("oozie.launcher.")) {
                 String name = entry.getKey().substring("oozie.launcher.".length());
@@ -257,18 +257,20 @@ public class JavaActionExecutor extends ActionExecutor {
             HadoopAccessorService has = Services.get().get(HadoopAccessorService.class);
             XConfiguration actionDefaultConf = has.createActionDefaultConf(conf.get(HADOOP_JOB_TRACKER), getType());
             injectLauncherProperties(actionDefaultConf, launcherConf);
-            // Inject <configuration> for launcher
-            Element e = actionXml.getChild("configuration", ns);
-            if (e != null) {
-                String strConf = XmlUtils.prettyPrint(e).toString();
-                XConfiguration inlineConf = new XConfiguration(new StringReader(strConf));
-                injectLauncherProperties(inlineConf, launcherConf);
+            // Inject <job-xml> and <configuration> for launcher
+            try {
+                parseJobXmlAndConfiguration(context, actionXml, appPath, launcherConf, true);
+            } catch (HadoopAccessorException ex) {
+                throw convertException(ex);
+            } catch (URISyntaxException ex) {
+                throw convertException(ex);
             }
             // Inject use uber mode for launcher
             injectLauncherUseUberMode(launcherConf);
             XConfiguration.copy(launcherConf, conf);
             checkForDisallowedProps(launcherConf, "launcher configuration");
-            e = actionXml.getChild("config-class", actionXml.getNamespace());
+            // Inject config-class for launcher to use for action
+            Element e = actionXml.getChild("config-class", ns);
             if (e != null) {
                 conf.set(LauncherMapper.OOZIE_ACTION_CONFIG_CLASS, e.getTextTrim());
             }
@@ -456,6 +458,11 @@ public class JavaActionExecutor extends ActionExecutor {
 
     public static void parseJobXmlAndConfiguration(Context context, Element element, Path appPath, Configuration conf)
             throws IOException, ActionExecutorException, HadoopAccessorException, URISyntaxException {
+        parseJobXmlAndConfiguration(context, element, appPath, conf, false);
+    }
+
+    public static void parseJobXmlAndConfiguration(Context context, Element element, Path appPath, Configuration conf,
+            boolean isLauncher) throws IOException, ActionExecutorException, HadoopAccessorException, URISyntaxException {
         Namespace ns = element.getNamespace();
         Iterator<Element> it = element.getChildren("job-xml", ns).iterator();
         HashMap<String, FileSystem> filesystemsMap = new HashMap<String, FileSystem>();
@@ -494,14 +501,22 @@ public class JavaActionExecutor extends ActionExecutor {
                 context.setErrorInfo("EL_ERROR", ex.getMessage());
             }
             checkForDisallowedProps(jobXmlConf, "job-xml");
-            XConfiguration.copy(jobXmlConf, conf);
+            if (isLauncher) {
+                injectLauncherProperties(jobXmlConf, conf);
+            } else {
+                XConfiguration.copy(jobXmlConf, conf);
+            }
         }
         Element e = element.getChild("configuration", ns);
         if (e != null) {
             String strConf = XmlUtils.prettyPrint(e).toString();
             XConfiguration inlineConf = new XConfiguration(new StringReader(strConf));
             checkForDisallowedProps(inlineConf, "inline configuration");
-            XConfiguration.copy(inlineConf, conf);
+            if (isLauncher) {
+                injectLauncherProperties(inlineConf, conf);
+            } else {
+                XConfiguration.copy(inlineConf, conf);
+            }
         }
     }
 
@@ -521,6 +536,7 @@ public class JavaActionExecutor extends ActionExecutor {
             // set cancel.delegation.token in actionConf that child job doesn't cancel delegation token
             actionConf.setBoolean("mapreduce.job.complete.cancel.delegation.tokens", false);
             updateConfForJavaTmpDir(actionConf);
+            setRootLoggerLevel(actionConf);
             return actionConf;
         }
         catch (IOException ex) {
@@ -531,6 +547,34 @@ public class JavaActionExecutor extends ActionExecutor {
         }
         catch (URISyntaxException ex) {
             throw convertException(ex);
+        }
+    }
+
+    /**
+     * Set root log level property in actionConf
+     * @param actionConf
+     */
+    void setRootLoggerLevel(Configuration actionConf) {
+        String oozieActionTypeRootLogger = "oozie.action." + getType() + LauncherMapper.ROOT_LOGGER_LEVEL;
+        String oozieActionRootLogger = "oozie.action." + LauncherMapper.ROOT_LOGGER_LEVEL;
+
+        // check if root log level has already mentioned in action configuration
+        String rootLogLevel = actionConf.get(oozieActionTypeRootLogger, actionConf.get(oozieActionRootLogger));
+        if (rootLogLevel != null) {
+            // root log level is mentioned in action configuration
+            return;
+        }
+
+        // set the root log level which is mentioned in oozie default
+        rootLogLevel = ConfigurationService.get(oozieActionTypeRootLogger);
+        if (rootLogLevel != null && rootLogLevel.length() > 0) {
+            actionConf.set(oozieActionRootLogger, rootLogLevel);
+        }
+        else {
+            rootLogLevel = ConfigurationService.get(oozieActionRootLogger);
+            if (rootLogLevel != null && rootLogLevel.length() > 0) {
+                actionConf.set(oozieActionRootLogger, rootLogLevel);
+            }
         }
     }
 
@@ -918,6 +962,8 @@ public class JavaActionExecutor extends ActionExecutor {
             // Inject Oozie job information if enabled.
             injectJobInfo(launcherJobConf, actionConf, context, action);
 
+            injectLauncherCallback(context, launcherJobConf);
+
             String jobId = context.getWorkflow().getId();
             String actionId = action.getId();
             Path actionDir = context.getActionDir();
@@ -1084,7 +1130,6 @@ public class JavaActionExecutor extends ActionExecutor {
 
             JobConf launcherJobConf = createLauncherConf(actionFs, context, action, actionXml, actionConf);
 
-            injectLauncherCallback(context, launcherJobConf);
             LOG.debug("Creating Job Client for action " + action.getId());
             jobClient = createJobClient(context, launcherJobConf);
             String launcherId = LauncherMapperHelper.getRecoveryId(launcherJobConf, context.getActionDir(), context
@@ -1118,6 +1163,19 @@ public class JavaActionExecutor extends ActionExecutor {
                         Text fauxAlias = new Text(tk.getKind() + "_" + tk.getService());
                         LOG.debug("ADDING TOKEN: " + fauxAlias);
                         launcherJobConf.getCredentials().addToken(fauxAlias, tk);
+                    }
+                    if (credentialsConf.getCredentials().numberOfSecretKeys() > 0) {
+                        for (Entry<String, CredentialsProperties> entry : credentialsProperties.entrySet()) {
+                            CredentialsProperties credProps = entry.getValue();
+                            if (credProps != null) {
+                                Text credName = new Text(credProps.getName());
+                                byte[] secKey = credentialsConf.getCredentials().getSecretKey(credName);
+                                if (secKey != null) {
+                                    LOG.debug("ADDING CREDENTIAL: " + credProps.getName());
+                                    launcherJobConf.getCredentials().addSecretKey(credName, secKey);
+                                }
+                            }
+                        }
                     }
                 }
                 else {
@@ -1220,6 +1278,8 @@ public class JavaActionExecutor extends ActionExecutor {
             HashMap<String, CredentialsProperties> credPropertiesMap) throws Exception {
 
         if (context != null && action != null && credPropertiesMap != null) {
+            // Make sure we're logged into Kerberos; if not, or near expiration, it will relogin
+            CredentialsProvider.ensureKerberosLogin();
             for (Entry<String, CredentialsProperties> entry : credPropertiesMap.entrySet()) {
                 String credName = entry.getKey();
                 CredentialsProperties credProps = entry.getValue();
@@ -1247,11 +1307,13 @@ public class JavaActionExecutor extends ActionExecutor {
         HashMap<String, CredentialsProperties> props = new HashMap<String, CredentialsProperties>();
         if (context != null && action != null) {
             String credsInAction = action.getCred();
-            LOG.debug("Get credential '" + credsInAction + "' properties for action : " + action.getId());
-            String[] credNames = credsInAction.split(",");
-            for (String credName : credNames) {
-                CredentialsProperties credProps = getCredProperties(context, credName);
-                props.put(credName, credProps);
+            if (credsInAction != null) {
+                LOG.debug("Get credential '" + credsInAction + "' properties for action : " + action.getId());
+                String[] credNames = credsInAction.split(",");
+                for (String credName : credNames) {
+                    CredentialsProperties credProps = getCredProperties(context, credName);
+                    props.put(credName, credProps);
+                }
             }
         }
         else {
@@ -1291,6 +1353,10 @@ public class JavaActionExecutor extends ActionExecutor {
                                 + propertyValue + "'");
                     }
                 }
+            }
+            if (credProp == null && credName != null) {
+                throw new ActionExecutorException(ActionExecutorException.ErrorType.ERROR, "JA021",
+                        "Could not load credentials with name [{0}]].", credName);
             }
         } else {
             LOG.debug("credentials is null for the action");
@@ -1670,10 +1736,12 @@ public class JavaActionExecutor extends ActionExecutor {
         }
     }
 
+    @Override
     public boolean requiresNameNodeJobTracker() {
         return true;
     }
 
+    @Override
     public boolean supportsConfigurationJobXML() {
         return true;
     }
